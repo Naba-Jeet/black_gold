@@ -1,0 +1,8 @@
+websockets
+aiohttp
+requests
+pandas
+redis
+python-dotenv
+apscheduler
+beautifulsoup4
