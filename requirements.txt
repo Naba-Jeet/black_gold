@@ -6,3 +6,7 @@ redis
 python-dotenv
 apscheduler
 beautifulsoup4
+tradingview-scraper
+python-dotenv
+streamlit
+duckdb
