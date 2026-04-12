@@ -10,3 +10,4 @@ tradingview-scraper
 python-dotenv
 streamlit
 duckdb
+plotly
