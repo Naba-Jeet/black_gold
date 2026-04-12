@@ -39,7 +39,7 @@ DATA_SOURCES = {
         "url": "https://in.investing.com/economic-calendar/eia-crude-oil-inventories-75"
     },
     "cot_data": {
-        "label": "CoT Positioning",
+        "label": "Commitments of Traders Positioning",
         "url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalCompressed/index.htm"
     },
     "gasoline_rbob": {

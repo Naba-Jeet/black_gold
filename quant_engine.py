@@ -4,20 +4,42 @@ import numpy as np
 from config import WEIGHTS
 
 def calculate_crack_spreads(wti, rbob, ho):
-    merged = pd.merge(wti[['date', 'price']], rbob[['date', 'price']], on='date', suffixes=('_wti', '_rbob'))
-    merged = pd.merge(merged, ho[['date', 'price']], on='date')
+    merged = pd.merge(wti[['date', 'price']], rbob[['date', 'price']], on='date', how='inner', suffixes=('_wti', '_rbob'))
+    merged = pd.merge(merged, ho[['date', 'price']], on='date', how='inner')
     merged.rename(columns={'price': 'price_ho'}, inplace=True)
+    
+    if merged.empty:
+        return pd.DataFrame(columns=['date', 'price_wti', 'price_rbob', 'price_ho', 'crack_spread'])
+    
     merged['crack_spread'] = (2 * merged['price_rbob']) + (1 * merged['price_ho']) - (3 * merged['price_wti'])
     return merged
 
 def calculate_z_score(brent_spr):
     price = brent_spr['price']
-    return (price.iloc[-1] - price.mean()) / price.std()
+    std = price.std()
+    if std == 0 or pd.isna(std):
+        return 0  # No volatility = neutral
+    return (price.iloc[-1] - price.mean()) / std
 
 def detect_liquidity_sweeps(df):
     df = df.copy()
     df['low_20'] = df['low'].rolling(window=20).min().shift(1)
     df['sweep'] = (df['low'] < df['low_20']) & (df['price'] > df['low_20']) & (df['vol'] > df['vol'].rolling(20).mean())
+    return df
+
+def detect_liquidity_sweeps_v2(df):
+    df = df.copy()
+    df['low_20'] = df['low'].rolling(window=20).min().shift(1)
+    df['vol_ma_20'] = df['vol'].rolling(20).mean()
+    df['vol_ratio'] = df['vol'] / df['vol_ma_20']
+    
+    # Sweep with volume confirmation
+    df['sweep'] = (
+        (df['low'] < df['low_20']) &           # Break recent low
+        (df['price'] > df['low_20']) &          # Reversal
+        (df['vol_ratio'] > 1.5) &               # Volume spike (150% of avg)
+        (df['price'] > df['open'])              # Close in upper half (buying)
+    )
     return df
 
 def calculate_inventory_shock(stocks_df):
@@ -56,18 +78,24 @@ def calculate_inv_momentum(stocks_df):
     return momentum
 
 def calculate_rsi(df, period=14):
+    df = df.copy()
     delta = df['price'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    rs = rs.replace([np.inf, -np.inf], np.nan)  # Handle division edge cases
+    rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.fillna(50)  # Fill NaN with neutral value
+    return rsi
 
 def calculate_vwap(df, window=20):
-    """Calculates Rolling VWAP for the specified window."""
     v = df['vol']
     p = (df['high'] + df['low'] + df['price']) / 3
     pv = p * v
-    return pv.rolling(window=window).sum() / v.rolling(window=window).sum()
+    vol_sum = v.rolling(window=window).sum()
+    vol_sum = vol_sum.replace(0, np.nan)  # Avoid division by zero
+    vwap = pv.rolling(window=window).sum() / vol_sum
+    return vwap.fillna(df['price']) 
 
 def calculate_sr_levels(df, window=10):
     """Detects Support and Resistance based on local swing highs/lows."""
@@ -106,14 +134,77 @@ def generate_detailed_force_matrix(current_crack, crack_mean, z_score, net_pos, 
     """Returns a detailed breakdown of each force's contribution."""
     matrix = {}
 
+        # Validate inputs
+    if pd.isna(z_score): z_score = 0
+    if pd.isna(current_crack) or pd.isna(crack_mean): current_crack, crack_mean = 0, 0
+    if pd.isna(net_pos): net_pos = 0
+    if pd.isna(inv_shock): inv_shock = 0
+    if pd.isna(inv_mom): inv_mom = 0
+    if rsi.empty or pd.isna(rsi.iloc[-1]): rsi_val = 50 
+    else: rsi_val = rsi.iloc[-1]
+
     matrix['Refinery Demand'] = WEIGHTS["crack_spread"] if current_crack > crack_mean else -WEIGHTS["crack_spread"]
-    matrix['Global Arb'] = WEIGHTS["z_score"] if z_score > 1.5 else 0
+    matrix['Global Arbitrage Force'] = WEIGHTS["z_score"] if z_score > 1.5 else 0
     matrix['Short Squeeze'] = WEIGHTS["cot_squeeze"] if net_pos < -10000 else 0
-    matrix['S&D Shock'] = WEIGHTS["inv_surprise"] if inv_shock < 0 else -WEIGHTS["inv_surprise"]
+    matrix['Supply Demand Shock'] = WEIGHTS["inv_surprise"] if inv_shock < 0 else -WEIGHTS["inv_surprise"]
     matrix['Inv Momentum'] = WEIGHTS["inv_momentum"] if inv_mom < 0 else -WEIGHTS["inv_momentum"]
-    matrix['Overextension'] = WEIGHTS["price_overext"] if rsi.iloc[-1] > 70 else 0
+    
+    matrix['Overextension'] = WEIGHTS["price_overext"] if rsi.iloc[-1] > 80 else 0
 
     total_score = sum(matrix.values())
     verdict = "BULLISH" if total_score >= 6 else "NEUTRAL" if total_score >= 3 else "BEARISH"
 
     return matrix, total_score, verdict
+
+def calculate_volume_profile(df, window=20, bins=50):
+    """
+    Groups volume by price levels
+    Returns price levels with highest volume concentration (POC, VAH, VAL)
+    """
+    recent = df.tail(window)
+    recent = df.tail(window)
+    if recent.empty or len(recent) < 2:
+        return {"poc": 0, "vah": 0, "val": 0, "profile": {}}
+    
+    price_min = recent['low'].min()
+    price_max = recent['high'].max()
+    
+    # Create price bins
+    bins_array = np.linspace(price_min, price_max, bins)
+    
+    # Distribute volume proportionally to each bar's price range
+    volume_profile = {}
+    for idx, row in recent.iterrows():
+        bar_range = row['high'] - row['low']
+        if bar_range == 0:
+            mid_price = row['close']
+            volume_profile[mid_price] = volume_profile.get(mid_price, 0) + row['vol']
+        else:
+            # Distribute volume evenly across the bar's price range
+            for bin_price in bins_array:
+                if row['low'] <= bin_price <= row['high']:
+                    volume_profile[bin_price] = volume_profile.get(bin_price, 0) + (row['vol'] / bins)
+    
+    # Calculate Point of Control (POC), Value Area High/Low
+    if not volume_profile:
+        return {"poc": 0, "vah": 0, "val": 0, "profile": {}}
+    
+    poc_price = max(volume_profile, key=volume_profile.get)
+    sorted_volumes = sorted(volume_profile.items(), key=lambda x: x[1], reverse=True)
+    total_vol = sum(volume_profile.values())
+    va_vol = total_vol * 0.70  # 70% of volume
+    
+    cum_vol = 0
+    va_prices = []
+    for price, vol in sorted_volumes:
+        va_prices.append(price)
+        cum_vol += vol
+        if cum_vol >= va_vol:
+            break
+    
+    return {
+        "poc": poc_price,
+        "vah": max(va_prices),
+        "val": min(va_prices),
+        "profile": volume_profile
+    }
