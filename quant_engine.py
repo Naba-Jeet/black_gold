@@ -208,3 +208,110 @@ def calculate_volume_profile(df, window=20, bins=50):
         "val": min(va_prices),
         "profile": volume_profile
     }
+
+
+def calculate_realized_volatility(wti_df, window=30):
+    """
+    Calculates realized volatility from historical WTI daily prices.
+    
+    Formula:
+    1. Calculate daily log returns: ln(price_t / price_t-1)
+    2. Compute std dev of last N returns (N = window parameter)
+    3. Annualize: multiply by √252 (trading days/year)
+    
+    Args:
+        wti_df: DataFrame with 'price' column (daily WTI prices)
+        window: Number of days to use for RV calculation (default 30, range 10-60)
+    
+    Returns: annualized volatility as percentage (0-100)
+    """
+    if wti_df.empty or len(wti_df) < window + 1:
+        return 0.0
+    
+    # Get last (window + 1) prices to calculate window returns
+    recent_prices = wti_df['price'].tail(window + 1)
+    
+    # Calculate daily log returns
+    log_returns = np.log(recent_prices / recent_prices.shift(1)).dropna()
+    
+    # Standard deviation of returns
+    std_dev = log_returns.std()
+    
+    if pd.isna(std_dev) or std_dev == 0:
+        return 0.0
+    
+    # Annualize: multiply by sqrt(252 trading days)
+    annualized_vol = std_dev * np.sqrt(252)
+    
+    # Convert to percentage
+    return annualized_vol * 100
+
+
+def calculate_vol_premium(wti_df, ovx_df, rv_window=30):
+    """
+    Calculates the Vol Premium: OVX (implied vol) - RV (realized vol)
+    
+    Args:
+        wti_df: DataFrame with WTI daily prices
+        ovx_df: DataFrame with OVX data
+        rv_window: Days of price history for RV calculation (default 30)
+    
+    Returns:
+    {
+        'vol_premium': float,          # OVX - RV (positive = overpriced)
+        'ovx_current': float,          # Current OVX reading
+        'rv_window_days': int,         # Window used for RV calculation
+        'rv_current': float,           # Realized volatility
+        'signal': str,                 # 'EXPENSIVE' | 'CHEAP' | 'NEUTRAL'
+        'recommendation': str          # Trading recommendation
+    }
+    """
+    try:
+        # Calculate realized volatility with specified window
+        rv_current = calculate_realized_volatility(wti_df, window=rv_window)
+        
+        # Get current OVX
+        if ovx_df.empty or len(ovx_df) == 0:
+            return {
+                'vol_premium': 0,
+                'ovx_current': 0,
+                'rv_window_days': rv_window,
+                'rv_current': rv_current,
+                'signal': 'NO_DATA',
+                'recommendation': 'Insufficient OVX data'
+            }
+        
+        ovx_current = float(ovx_df['price'].iloc[-1])
+        
+        # Calculate vol premium
+        vol_premium = ovx_current - rv_current
+        
+        # Determine signal
+        if vol_premium > 15:
+            signal = 'EXPENSIVE'
+            recommendation = 'Options overpriced → Sell volatility (short straddles/calls)'
+        elif vol_premium < -10:
+            signal = 'CHEAP'
+            recommendation = 'Options underpriced → Buy volatility (long straddles/calls)'
+        else:
+            signal = 'NEUTRAL'
+            recommendation = 'No clear vol edge → Use directional trades only'
+        
+        return {
+            'vol_premium': vol_premium,
+            'ovx_current': ovx_current,
+            'rv_window_days': rv_window,
+            'rv_current': rv_current,
+            'signal': signal,
+            'recommendation': recommendation
+        }
+    
+    except Exception as e:
+        return {
+            'vol_premium': 0,
+            'ovx_current': 0,
+            'rv_window_days': rv_window,
+            'rv_current': 0,
+            'signal': 'ERROR',
+            'recommendation': f'Volatility calculation error: {str(e)}'
+        }

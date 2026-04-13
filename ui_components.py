@@ -115,7 +115,7 @@ def render_data_explorer_page():
 
 
 
-def render_terminal_page(datasets, availability, weeks_lookback=26):
+def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30):
     """
     datasets: dict with keys: wti, brent_spr, cot, rbob, ho, cracks, eia
     availability: dict tracking which datasets loaded successfully
@@ -201,7 +201,81 @@ def render_terminal_page(datasets, availability, weeks_lookback=26):
         metrics['net_pos'], metrics['inv_shock']['value'], metrics['inv_mom'], 
         metrics['rsi']
     )
+
+    st.divider()
+
+        # --- VOLATILITY OVERLAY SECTION ---
+    st.subheader("📊 Volatility Premium Analysis (Strategy Overlay)")
     
+    if availability.get('wti') and availability.get('ovx'):
+        from quant_engine import calculate_vol_premium
+        
+        ovx_f = datasets.get('ovx')
+        # Use FULL wti dataset (not filtered) for accurate RV calculation
+        wti_full = datasets.get('wti')
+        
+        if ovx_f is not None and len(ovx_f) > 0 and wti_full is not None and len(wti_full) > 0:
+            vol_data = calculate_vol_premium(wti_full, ovx_f, rv_window=rv_window)
+            
+            vol_col1, vol_col2, vol_col3, vol_col4 = st.columns(4)
+            
+            with vol_col1:
+                st.metric(
+                    "OVX (Implied Vol)", 
+                    f"{vol_data['ovx_current']:.2f}",
+                    help="CBOE Crude Oil Volatility Index — market-priced 30-day IV"
+                )
+            
+            with vol_col2:
+                st.metric(
+                    f"RV ({rv_window}d)", 
+                    f"{vol_data['rv_current']:.2f}",
+                    help=f"Realized Volatility from last {rv_window} days of WTI prices"
+                )
+            
+            with vol_col3:
+                st.metric(
+                    "Vol Premium",
+                    f"{vol_data['vol_premium']:.2f}",
+                    delta=vol_data['signal'],
+                    help="OVX minus RV — positive means options are expensive"
+                )
+            
+            with vol_col4:
+                if vol_data['signal'] == 'EXPENSIVE':
+                    st.error(f"⚠️ {vol_data['signal']}\nSell vol edge")
+                elif vol_data['signal'] == 'CHEAP':
+                    st.success(f"✅ {vol_data['signal']}\nBuy vol edge")
+                else:
+                    st.info(f"🟩 {vol_data['signal']}\nNo vol edge")
+            
+            # Recommendation box
+            st.info(f"**Strategy Recommendation:** {vol_data['recommendation']}")
+            
+            # Combined directional + vol signal
+            st.write("### 🎯 Combined Signal (Direction + Volatility)")
+            if total_score >= 6:
+                if vol_data['vol_premium'] < -10:
+                    st.success("🚀 **IDEAL SETUP:** Bullish Score + Cheap IV → Buy OTM calls for leverage at discount")
+                elif vol_data['vol_premium'] > 15:
+                    st.warning("⚡ **OPPORTUNE:** Bullish Score + Expensive IV → Use futures or deep ITM calls (avoid OTM — overpriced)")
+                else:
+                    st.info("📈 **BULLISH:** Balanced IV → Use any directional vehicle (futures, calls, spreads)")
+            elif total_score < 3:
+                if vol_data['vol_premium'] < -10:
+                    st.success("⚠️ **HEDGED DOWNSIDE:** Bearish Score + Cheap IV → Buy OTM puts for protection at discount")
+                elif vol_data['vol_premium'] > 15:
+                    st.warning("📉 **SELL VOL:** Bearish Score + Expensive IV → Short straddles or covered calls")
+                else:
+                    st.error("🔻 **BEARISH:** Neutral IV → Use futures (avoid expensive premium hedges)")
+            else:
+                st.info("🔄 **NEUTRAL SCORE:** Price action matters more — use RSI, VWAP, S/R filters")
+        else:
+            st.warning("⏳ OVX data not available for volatility analysis. Upload OVX CSV via Data Ingestion page.")
+    else:
+        st.warning("⏳ WTI or OVX data missing. Upload both files to enable volatility overlay.")
+
+
     # Add info box showing active filter
     st.info(f"📊 **Metrics calculated from last {weeks_lookback} weeks of data**")
     

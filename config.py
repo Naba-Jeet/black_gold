@@ -8,6 +8,7 @@ REQUIRED_SCHEMAS = {
     "cot_data": ["as_of_date_in_form_yymmdd", "m_money_positions_long_all", "m_money_positions_short_all"],
     "gasoline_rbob": ["date", "price", "vol"],
     "heating_oil": ["date", "price", "vol"],
+    "ovx_data": ["date", "price", "open", "high", "low"],
 }
 
 PRIMARY_KEYS = {
@@ -18,6 +19,7 @@ PRIMARY_KEYS = {
     "cot_data": "as_of_date_in_form_yymmdd",
     "gasoline_rbob": "date",
     "heating_oil": "date",
+    "ovx_data": "date",
 }
 
 # External Data Source Links
@@ -49,6 +51,10 @@ DATA_SOURCES = {
     "heating_oil": {
         "label": "Heating Oil",
         "url": "https://in.investing.com/commodities/heating-oil-historical-data"
+    },
+    "ovx_data": {
+        "label": "CBOE Crude Oil Volatility (OVX)",
+        "url": "https://in.investing.com/indices/cboe-crude-oil-volatility-historical-data"
     },
 }
 

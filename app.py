@@ -45,6 +45,18 @@ elif page == "🎯 Predictive Terminal":
         value=4,  # default 1 months
         help="Calculate metrics using the last X weeks of data"
     )
+
+    # Volatility settings
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📊 Volatility Settings")
+    rv_window = st.sidebar.slider(
+        "Realized Volatility Window (days)",
+        min_value=10,
+        max_value=60,
+        value=30,
+        step=5,
+        help="Calculate 30-day RV using last X days of price data"
+    )
     
     # Load each dataset independently with error tracking
     datasets = {}
@@ -100,9 +112,16 @@ elif page == "🎯 Predictive Terminal":
     else:
         datasets['cracks'] = None
         availability['cracks'] = False
+    
+    # Load OVX data from DuckDB
+    try:
+        datasets['ovx'] = load_from_db("ovx_data")
+        availability['ovx'] = datasets['ovx'] is not None and len(datasets['ovx']) > 0
+    except:
+        availability['ovx'] = False
 
     # Render terminal with availability flags
-    render_terminal_page(datasets, availability, weeks_lookback)
+    render_terminal_page(datasets, availability, weeks_lookback, rv_window)
 
 elif page == "📈 Quant Analysis":
     try:
@@ -119,26 +138,114 @@ elif page == "🧮 Logic Center":
         This terminal transitions from **Descriptive Analytics** (what happened) to **Predictive Flow** (what is forced to happen).
         
         ### 1. The Refinery Vacuum (Crack Spread)
-        **Formula:**
-        $$C_s = 2R + H - 3W$$
-        where $R$ = RBOB Gasoline, $H$ = Heating Oil, $W$ = WTI Crude
+        **What it is:** The profit margin refineries earn by converting crude oil into refined products (gasoline + heating oil).
+        
+        **Why it matters:** When the crack spread is wide (high), refineries are highly profitable → they buy more crude oil to maximize output → demand increases → WTI price rises. When narrow (low), refineries cut production → demand falls → WTI price falls.
+        
+        **Formula breakdown:** 
+        $C_s = 2R + H - 3W$
+        - 2 barrels of RBOB gasoline
+        - 1 barrel of heating oil
+        - Minus 3 barrels of WTI crude (typical yield from one barrel)
+        
+        **How to interpret:**
+        - **Crack > Historical mean** → Refinery margins are expanding → Bullish for crude (refineries incentivized to buy)
+        - **Crack < Historical mean** → Margins contracting → Bearish for crude (refineries reducing production)
+        - **Extreme highs** → Unsustainable; refineries will eventually reduce runs when margins normalize
+        
+        **Trading signal:** Crack Spread = +2 weight in Force Matrix (contributes to bullish score when expanding)
         
         ### 2. The Arbitrage Force (Z-Score)
+        **What it is:** Measures how far the Brent-WTI spread has deviated from its historical average, expressed in standard deviations.
+        
+        **Why it matters:** When WTI is much cheaper than Brent, arbitrageurs (traders) can profit by buying WTI and selling Brent → this buying pressure lifts WTI prices. When WTI is expensive vs Brent, the reverse happens.
+        
+        **Formula breakdown:** 
+        $$z = \\frac{(B - W) - \\mu}{\\sigma}$$
+        - B = Brent price
+        - W = WTI price
+        - μ = historical mean of the spread
+        - σ = standard deviation
+        
+        **How to interpret:**
+        - **z > +1.5** → WTI is cheap vs Brent by 1.5+ standard deviations → Arbitrage opportunity (buy WTI) → Bullish
+        - **z < -1.5** → WTI is expensive vs Brent by 1.5+ standard deviations → Arb opportunity (sell WTI) → Bearish
+        - **-1.5 < z < +1.5** → Spread is normal, no extreme mispricing → Neutral
+        
+        **Trading signal:** Z-Score = +3 weight in Force Matrix (strongest contributor to directional moves)
+                
         **Formula:**
         $$z = \\frac{(B - W) - \\mu}{\\sigma}$$
         where $B$ = Brent, $W$ = WTI, $\\mu$ = historical mean, $\\sigma$ = standard deviation
         
         ### 3. The Sentiment Squeeze (COT Net Position)
+        **What it is:** The net positioning of large speculators (Managed Money) in WTI futures — the difference between their long positions and short positions.
+        
+        **Why it matters:** Extreme positioning creates a "squeeze." When speculators are trapped on one side:
+        - **Net SHORT (many shorts trapped)** → Forced covering creates buying pressure → WTI rises
+        - **Net LONG (many longs trapped)** → Forced liquidation creates selling pressure → WTI falls
+        
+        **Formula breakdown:** 
+        $$P_{net} = L_{managed} - S_{managed}$$
+        - $L_{managed}$ = Managed Money Long positions
+        - $S_{managed}$ = Managed Money Short positions
+        
+        **How to interpret:**
+        - **Net < -10,000 contracts** → Short squeeze territory → Force Short Squeeze = +3 (bullish)
+        - **Net > +10,000 contracts** → Long squeeze territory → Force Long Squeeze = -3 (bearish)
+        - **-10,000 < Net < +10,000** → Balanced positioning → No extreme squeeze risk → Neutral
+        
+        **Trading signal:** COT Squeeze = +3 weight in Force Matrix. This is a leveraged signal — when combined with other bullish metrics, it amplifies upside potential (and vice versa for bearish).
+        
+        **Note:** COT data is released weekly on Fridays with 3-day lag, so positions can shift before you can execute. Best used as confirmation, not sole entry signal.        
+        
         **Formula:**
         $$P_{net} = L_{managed} - S_{managed}$$
         where $L_{managed}$ = Managed Money Long Positions, $S_{managed}$ = Managed Money Short Positions
         
         ### 4. Inventory Shock (Supply & Demand)
+        **What it is:** The surprise or shock when actual weekly inventory change differs from the market's forecast.
+        
+        **Why it matters:** Inventory data drives immediate price moves because it reveals actual supply/demand imbalance. If actual inventory draw is much larger than forecast, it shocks the market that supply is tighter than expected → prices spike up. Vice versa for builds.
+        
+        **Formula breakdown:** 
+        $$\\Delta I = A - F$$
+        - A = Actual weekly inventory change (barrels)
+        - F = Forecast (consensus estimate)
+        
+        **How to interpret:**
+        - **Shock < 0 (negative, larger draw than expected)** → Supply is tighter → Bullish = +2
+        - **Shock > 0 (larger build than expected)** → Supply is more abundant → Bearish = -2
+        - **Shock ≈ 0** → Market expectations met → Neutral = 0
+        
+        **Example:** Market forecast says crude inventory up 2M BBL, but actual is up 5M BBL → Shock = +3M BBL (bearish, more supply than expected)
+        
+        **Trading signal:** S&D Shock = +2 weight in Force Matrix. Most volatile component — often drives the largest single-day WTI moves when EIA releases (Wednesdays 10:30am ET).
+
         **Formula:**
         $$\\Delta I = A - F$$
         where $A$ = Actual weekly inventory change (BBL), $F$ = Market forecast (BBL)
         
         ### 5. Inventory Momentum (4-Week Trend)
+        **What it is:** The average direction and magnitude of inventory changes over the last 4 weeks — tells you if supply is building or drawing structurally (not just one-week noise).
+        
+        **Why it matters:** A single large draw might be a fluke; but 4 consecutive weeks of draws signals a **structural trend** that refineries are run-down and demand is strong → longer-term bullish. Conversely, 4 weeks of builds = structural glut.
+        
+        **Formula breakdown:** 
+        $$M = \\frac{1}{4}\\sum_{i=0}^{3} A_{t-i}$$
+        - Average of last 4 weeks of actual inventory changes
+        
+        **How to interpret:**
+        - **Momentum < 0 (negative, structural draw)** → Supply pressure over time → Bullish = +2
+        - **Momentum > 0 (positive, structural build)** → Inventory accumulating → Bearish = -2
+        - **Momentum ≈ 0** → No structural trend → Neutral = 0
+        
+        **Example:** Last 4 weeks: -2M, -1.5M, -2.5M, -1M BBL changes → Average = -1.75M → Structural draw (bullish)
+        
+        **Trading signal:** Inv Momentum = +2 weight in Force Matrix. Smoother than S&D Shock (no single-week spikes) — good for trend confirmation over 1-month horizon.
+        
+        **Difference from S&D Shock:** Shock tells you if THIS WEEK was a surprise. Momentum tells you if the TREND is bullish or bearish.        
+        
         **Formula:**
         $$M = \\frac{1}{4}\\sum_{i=0}^{3} A_{t-i}$$
         where negative $M$ indicates structural draw, positive indicates build
@@ -152,6 +259,27 @@ elif page == "🧮 Logic Center":
         **Formula:**
         $$\\text{VWAP} = \\frac{\\sum_{i=1}^{n} P_i \\cdot V_i}{\\sum_{i=1}^{n} V_i}$$
         where $P_i = \\frac{H_i + L_i + C_i}{3}$ (typical price), $V_i$ = volume
+                
+         ### 8. Implied Volatility vs Realized Volatility (Vol Premium)
+        
+        **The Vol Premium Signal:**
+        
+        $$\\text{Vol Premium} = \\text{OVX}_{t} - \\text{RV}_{30d}$$
+        
+        where $\\text{OVX}$ = CBOE Crude Oil Volatility Index (market-priced 30-day IV)
+        and $\\text{RV}_{30d}$ = 30-day realized volatility from historical prices
+        
+        **Interpretation:**
+        - **Vol Premium > +15:** Options expensive → Market overpaying for protection → Sell volatility
+        - **Vol Premium < -10:** Options cheap → Market underpricing actual moves → Buy volatility  
+        - **±10 range:** Neutral → No vol edge, use directional trades only
+        
+        **Key Insight:** Vol Premium tells you **HOW to trade** the direction (futures vs options, ITM vs OTM), not **WHAT direction** to trade. It is a strategy overlay on top of the directional Force Score.
+        
+        **Example:**
+        - Force Score = BULLISH + Vol Premium > +15 → Long WTI futures or deep ITM calls (avoid OTM — overpriced)
+        - Force Score = BULLISH + Vol Premium < -10 → Buy OTM calls (cheap leverage at a discount)
+        - Force Score = NEUTRAL (3-6) → Skip options entirely; if trading, use price-action filters only
         
         ---
         
