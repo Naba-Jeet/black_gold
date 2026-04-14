@@ -14,27 +14,24 @@ st.set_page_config(
 st.sidebar.title("🛢️ Crude Flow Terminal")
 st.sidebar.markdown("---")
 
-page = st.sidebar.radio(
-    "Main Menu",
+page = st.sidebar.pills(
+    "Pages",
     [
-        "📦 Data Ingestion", 
-        "📊 Data Explorer",      # NEW PAGE
         "🎯 Predictive Terminal", 
         "📈 Quant Analysis", 
+        "📦 Data Ingestion", 
+        "📊 Data Explorer",    
         "🧮 Logic Center"
-    ]
+    ],
+    width=200,
+    #selection_mode='single',
+    default="🎯 Predictive Terminal"
 )
 
-st.sidebar.markdown("---")
-st.sidebar.info("System Status: **Operational**\nDatabase: **DuckDB Columnar**\nMode: **Predictive Flow**")
+#st.sidebar.markdown("---")
+#st.sidebar.info("System Status: **Operational**\nDatabase: **DuckDB Columnar**\nMode: **Predictive Flow**")
 
-if page == "📦 Data Ingestion":
-    render_ingestion_page()
-
-elif page == "📊 Data Explorer":
-    render_data_explorer_page()
-
-elif page == "🎯 Predictive Terminal":
+if page == "🎯 Predictive Terminal":
     # Add week filter to sidebar
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📅 Predictive Terminal Settings")
@@ -99,12 +96,6 @@ elif page == "🎯 Predictive Terminal":
     except:
         availability['eia'] = False
 
-    try:
-        datasets['tanker'] = load_from_db("tanker_flow")
-        availability['tanker'] = datasets['tanker'] is not None and len(datasets['tanker']) > 0
-    except:
-        availability['tanker'] = False
-
     # Calculate crack spreads only if all dependencies exist
     if availability['wti'] and availability['rbob'] and availability['ho']:
         datasets['cracks'] = calculate_crack_spreads(datasets['wti'], datasets['rbob'], datasets['ho'])
@@ -122,6 +113,12 @@ elif page == "🎯 Predictive Terminal":
 
     # Render terminal with availability flags
     render_terminal_page(datasets, availability, weeks_lookback, rv_window)
+
+elif page == "📊 Data Explorer":
+    render_data_explorer_page()
+
+elif page == "📦 Data Ingestion":
+    render_ingestion_page()
 
 elif page == "📈 Quant Analysis":
     try:

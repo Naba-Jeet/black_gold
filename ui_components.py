@@ -122,14 +122,14 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
     """
     st.title("📶 Crude Flow Predictive Terminal")
 
-    status_cols = st.columns(8)
-    dataset_names = ["WTI OHLC", "Brent Spread", "COT", "RBOB", "HO", "EIA", "Cracks"]
-    for idx, (name, avail_key) in enumerate(zip(dataset_names, ["wti", "brent_spr", "cot", "rbob", "ho", "eia", "cracks"])):
-        with status_cols[idx]:
-            if availability.get(avail_key, False):
-                st.success(f"✅ {name}")
-            else:
-                st.warning(f"⏳ {name}")
+    # status_cols = st.columns(8)
+    # dataset_names = ["WTI OHLC", "Brent Spread", "COT", "RBOB", "HO", "EIA", "Cracks"]
+    # for idx, (name, avail_key) in enumerate(zip(dataset_names, ["wti", "brent_spr", "cot", "rbob", "ho", "eia", "cracks"])):
+    #     with status_cols[idx]:
+    #         if availability.get(avail_key, False):
+    #             st.success(f"✅ {name}")
+    #         else:
+    #             st.warning(f"⏳ {name}")
 
     # Check if minimum data exists
     min_requirements_met = availability.get('wti') and availability.get('cracks')
@@ -205,6 +205,25 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
     st.divider()
 
         # --- VOLATILITY OVERLAY SECTION ---
+            # WTI Latest Date
+    if availability.get('wti') and datasets.get('wti') is not None and not datasets['wti'].empty:
+        wti_latest_date = pd.to_datetime(datasets['wti']['date']).max().strftime('%Y-%m-%d')
+        st.badge(f"Last WTI Crude OHLC Date: **{wti_latest_date}** | Metrics calculated from last **{weeks_lookback}** weeks of data", color='violet', icon=":material/date_range:")
+
+        
+    if availability['wti'] and wti_f is not None and len(wti_f) > 0:
+        poc_data = calculate_volume_profile(wti_f, window=weeks_lookback)
+        # st.info(f"**Point of Control (POC): ${poc_data['poc']:.2f}**")
+        p_high = poc_data['vah']
+        p_low = poc_data['val']
+        # st.info(f"**Value Area (High): ${poc_data['vah']:.2f}**")
+        # st.info(f"**Value Area (Low): ${poc_data['val']:.2f}**")
+    else:
+        p_high = 1
+        p_high = 0
+
+        # st.warning("⏳ WTI data not available for Volume Profile calculation")
+
     st.subheader("📊 Volatility Premium Analysis (Strategy Overlay)")
     
     if availability.get('wti') and availability.get('ovx'):
@@ -235,25 +254,27 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
             
             with vol_col3:
                 st.metric(
-                    "Vol Premium",
+                    "Vol Premium (Option Pricing)",
                     f"{vol_data['vol_premium']:.2f}",
                     delta=vol_data['signal'],
-                    help="OVX minus RV — positive means options are expensive"
+                    help="OVX minus RV — positive means options are expensive",
+                    border=True,
+                    format="dollar"
                 )
             
-            with vol_col4:
-                if vol_data['signal'] == 'EXPENSIVE':
-                    st.error(f"⚠️ {vol_data['signal']}\nSell vol edge")
-                elif vol_data['signal'] == 'CHEAP':
-                    st.success(f"✅ {vol_data['signal']}\nBuy vol edge")
-                else:
-                    st.info(f"🟩 {vol_data['signal']}\nNo vol edge")
+            # with vol_col4:
+            #     if vol_data['signal'] == 'EXPENSIVE':
+            #         st.error(f"⚠️ {vol_data['signal']}")
+            #     elif vol_data['signal'] == 'CHEAP':
+            #         st.success(f"✅ {vol_data['signal']}")
+            #     else:
+            #         st.info(f"🟩 {vol_data['signal']}")
             
             # Recommendation box
-            st.info(f"**Strategy Recommendation:** {vol_data['recommendation']}")
+            # st.info(f"**Strategy Recommendation:** {vol_data['recommendation']}")
             
             # Combined directional + vol signal
-            st.write("### 🎯 Combined Signal (Direction + Volatility)")
+            st.markdown("#### 🧭 Strategy (Volatility + Trend + S/D Analysis)")
             if total_score >= 6:
                 if vol_data['vol_premium'] < -10:
                     st.success("🚀 **IDEAL SETUP:** Bullish Score + Cheap IV → Buy OTM calls for leverage at discount")
@@ -263,7 +284,15 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
                     st.info("📈 **BULLISH:** Balanced IV → Use any directional vehicle (futures, calls, spreads)")
             elif total_score < 3:
                 if vol_data['vol_premium'] < -10:
-                    st.success("⚠️ **HEDGED DOWNSIDE:** Bearish Score + Cheap IV → Buy OTM puts for protection at discount")
+                    st.metric(
+                        label="⚠️ HEDGED DOWNSIDE",
+                        value = f"Vol. Prem: {vol_data['vol_premium']:.2f} + Agg Score: {total_score}",
+                        help="Bearish directional bias but options are cheap → use OTM puts to hedge at discount",
+                        border=True, delta=f"Bearish Score: {total_score}", delta_color="red", delta_arrow="down",
+                        format = "dollar"
+                    )
+
+                    # st.badge("⚠️ **HEDGED DOWNSIDE:** Bearish Score + Cheap IV → Buy OTM puts for protection at discount")
                 elif vol_data['vol_premium'] > 15:
                     st.warning("📉 **SELL VOL:** Bearish Score + Expensive IV → Short straddles or covered calls")
                 else:
@@ -275,29 +304,29 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
     else:
         st.warning("⏳ WTI or OVX data missing. Upload both files to enable volatility overlay.")
 
-
     # Add info box showing active filter
-    st.info(f"📊 **Metrics calculated from last {weeks_lookback} weeks of data**")
-    
-    if availability['wti'] and wti_f is not None and len(wti_f) > 0:
-        poc_data = calculate_volume_profile(wti_f, window=weeks_lookback)
-        st.info(f"**Point of Control (POC): ${poc_data['poc']:.2f}**")
-        st.info(f"**Value Area (High): ${poc_data['vah']:.2f}**")
-        st.info(f"**Value Area (Low): ${poc_data['val']:.2f}**")
-    else:
-        st.warning("⏳ WTI data not available for Volume Profile calculation")
+    # st.info(f"📊 **Metrics calculated from last {weeks_lookback} weeks of data**")
+
 
     m1, m2, m3, m4, m5 = st.columns(5)
 
     if availability['cracks']:
-        m1.metric("Crack Spread", f"${metrics['current_crack']:.2f}", 
-            delta="Expanding" if metrics['current_crack'] > metrics['crack_mean'] else "Contracting")
+        if metrics['current_crack'] > metrics['crack_mean']:
+            m1.metric("Crack Spread", f"${metrics['current_crack']:.2f}", delta="Expanding", delta_arrow="up", delta_color="green")
+        elif metrics['current_crack'] < metrics['crack_mean']:
+            m1.metric("Crack Spread", f"${metrics['current_crack']:.2f}", delta="Contracting", delta_arrow="down", delta_color="red")
+        else:
+            m1.metric("Crack Spread", f"${metrics['current_crack']:.2f}", delta="Stable", delta_arrow="off", delta_color="blue")
     else:
         m1.warning("No Crack Data")
     
     if availability['cot']:
-        m2.metric("Squeeze Factor", f"{metrics['net_pos']}", 
-            delta="Short Squeeze 📈" if metrics['net_pos'] < -10000 else "Long Squeeze 📉" if metrics['net_pos'] > 10000 else "Balanced")
+        if metrics['net_pos'] < -10000:
+            m2.metric("Squeeze Factor", f"{metrics['net_pos']}", delta="Short Squeeze", delta_color="green", delta_arrow="up")
+        elif metrics['net_pos'] > 10000:
+            m2.metric("Squeeze Factor", f"{metrics['net_pos']}", delta="Long Squeeze", delta_color="red", delta_arrow="down")
+        else:
+            m2.metric("Squeeze Factor", f"{metrics['net_pos']}", delta="Neutral", delta_color="blue", delta_arrow="off")
     else:
         m2.warning("No COT Data")
     # Condition	Signal	Meaning
@@ -307,8 +336,15 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
 
 
     if availability['eia']:
-        m3.metric("Supply-Demand Shock", f"{metrics['inv_shock']['abs_m']:.2f}M BBL", 
-            delta="Bullish" if metrics['inv_shock']['value'] < 0 else "Bearish")
+        if metrics['inv_shock']['value'] < 0:
+            m3.metric("Supply-Demand Shock", f"{metrics['inv_shock']['abs_m']:.2f}M BBL", 
+            delta="Bullish", delta_color="green", delta_arrow="up")
+        elif metrics['inv_shock']['value'] > 0:
+            m3.metric("Supply-Demand Shock", f"{metrics['inv_shock']['abs_m']:.2f}M BBL", 
+            delta="Bearish", delta_color="red", delta_arrow="down")
+        else:
+            m3.metric("Supply-Demand Shock", f"{metrics['inv_shock']['abs_m']:.2f}M BBL", 
+            delta="Neutral", delta_color="blue", delta_arrow="off")
     else:
         m3.warning("No EIA Data")
 #     Scenario	Value	Signal	Meaning
@@ -317,8 +353,15 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
 #     Actual = Forecast	~0	Neutral	Expectations met, no surprise
 
     if availability['brent_spr']:
-        m4.metric("Spread-Z Score", f"{metrics['z_score']:.2f}", 
-            delta="Arb Bullish 📈" if metrics['z_score'] > 1.5 else "Arb Bearish 📉" if metrics['z_score'] < -1.5 else "Neutral")
+        if metrics['z_score'] > 1.5:
+            m4.metric("Brent-WTI Spread -Z Score", f"{metrics['z_score']:.2f}", 
+            delta="Bullish 📈", delta_color="green", delta_arrow="up")
+        elif metrics['z_score'] < -1.5:
+            m4.metric("Brent-WTI Spread -Z Score", f"{metrics['z_score']:.2f}", 
+            delta="Bearish 📉", delta_color="red", delta_arrow="down")
+        else:
+            m4.metric("Brent-WTI Spread -Z Score", f"{metrics['z_score']:.2f}", 
+            delta="Neutral", delta_color="blue", delta_arrow="off")
     else:
         m4.warning("No Spread Data")
 #   The Z-Score measures how far the Brent-WTI spread is from its historical average, in terms of standard deviations.
@@ -328,8 +371,15 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
 #   -1.5 < z < 1.5	Spread is normal	Neutral	No strong arbitrage signal
 
     if availability['wti']:
-        m5.metric("RSI (14)", f"{metrics['rsi'].iloc[-1]:.1f}", 
-            delta="Overbought" if metrics['rsi'].iloc[-1] > 80 else "Oversold" if metrics['rsi'].iloc[-1] < 20 else "")
+        if metrics['rsi'].iloc[-1] > 80:
+            m5.metric("RSI (14)", f"{metrics['rsi'].iloc[-1]:.1f}", 
+            delta="Overbought", delta_color="red", delta_arrow="up")
+        elif metrics['rsi'].iloc[-1] < 20:
+            m5.metric("RSI (14)", f"{metrics['rsi'].iloc[-1]:.1f}", 
+            delta="Oversold", delta_color="green", delta_arrow="down")
+        else:
+            m5.metric("RSI (14)", f"{metrics['rsi'].iloc[-1]:.1f}", 
+            delta="Neutral", delta_color="blue", delta_arrow="off")
     else:
         m5.warning("No WTI Data")
 
@@ -337,7 +387,49 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
 
     # --- THE VERDICT SECTION ---
     color = "green" if verdict == "BULLISH" else "grey" if verdict == "NEUTRAL" else "red"
-    st.markdown(f"<h2 style='text-align: center; color: {color};'>VERDICT: {verdict}</h2>", unsafe_allow_html=True)
+    st.markdown(f"<h4 style='text-align: center; color: {color};'>FINAL VERDICT: {verdict}</h4>", unsafe_allow_html=True)
+    
+    target_metric, sl_metric = st.columns(2)
+
+    if verdict == "BEARISH":
+        target_metric.metric(
+            label="Probable Target Price",
+            value=f"${p_low:.2f}",
+            help="Price tends to move towards value",
+            border=True, delta="Value Area High", delta_color="green", delta_arrow="up"
+        )
+        sl_metric.metric(
+            label="Probable Stop Loss",
+            value=f"${p_high:.2f}",
+            help="Price tends to move away from value",
+            border=True, delta="Value Area Low", delta_color="red", delta_arrow="down"
+        )
+    if verdict == "BULLISH":
+        target_metric.metric(
+            label="Probable Target Price",
+            value=f"${p_high:.2f}",
+            help="Price tends to move towards value",
+            border=True, delta="Value Area High", delta_color="green", delta_arrow="up"
+        )
+        sl_metric.metric(
+            label="Probable Stop Loss",
+            value=f"${p_low:.2f}",
+            help="Price tends to move away from value",
+            border=True, delta="Value Area Low", delta_color="red", delta_arrow="down"
+        )
+    if verdict == "NEUTRAL":
+        target_metric.metric(
+            label="Value Area High",
+            value=f"${p_high:.2f}",
+            help="Upper bound of value area from volume profile",
+            border=True, delta="Value Area High", delta_color="green", delta_arrow="up"
+        )
+        sl_metric.metric(
+            label="Value Area Low",
+            value=f"${p_low:.2f}",
+            help="Lower bound of value area from volume profile",
+            border=True, delta="Value Area Low", delta_color="red", delta_arrow="down"
+        )
 
     col_left, col_right = st.columns([2, 1])
 
