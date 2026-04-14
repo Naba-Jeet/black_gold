@@ -16,16 +16,11 @@ def calculate_crack_spreads(wti, rbob, ho):
 
 def calculate_z_score(brent_spr):
     price = brent_spr['price']
-    std = price.std()
+    std = price.std(ddof=0)  # Population std for z-score
     if std == 0 or pd.isna(std):
         return 0  # No volatility = neutral
     return (price.iloc[-1] - price.mean()) / std
 
-def detect_liquidity_sweeps(df):
-    df = df.copy()
-    df['low_20'] = df['low'].rolling(window=20).min().shift(1)
-    df['sweep'] = (df['low'] < df['low_20']) & (df['price'] > df['low_20']) & (df['vol'] > df['vol'].rolling(20).mean())
-    return df
 
 def detect_liquidity_sweeps_v2(df):
     df = df.copy()
@@ -70,12 +65,13 @@ def calculate_inventory_shock(stocks_df):
 def calculate_inv_momentum(stocks_df):
     """4-Week Moving Average of changes. Negative = Structural Draw"""
     def clean_m(val):
-        if isinstance(val, str): return float(val.replace('M', ''))
-        return float(val) if pd.notnull(val) else 0
+        if isinstance(val, str): return float(val.replace('M', '')) * 1_000_000
+        return float(val) * 1_000_000 if pd.notnull(val) else 0
 
+    stocks_df = stocks_df.copy()
     stocks_df['clean_actual'] = stocks_df['actual'].apply(clean_m)
     momentum = stocks_df['clean_actual'].tail(4).mean()
-    return momentum
+    return momentum if not pd.isna(momentum) else 0
 
 def calculate_rsi(df, period=14):
     df = df.copy()
@@ -109,18 +105,38 @@ def generate_convergence_verdict(current_crack, crack_mean, z_score, net_pos, in
 
     if current_crack > crack_mean:
         score += WEIGHTS["crack_spread"]; reasons.append("Refinery demand is high (Crack Spread Expanding)")
+    elif current_crack < crack_mean:
+        score -= WEIGHTS["crack_spread"]; reasons.append("Refinery demand is low (Crack Spread Contracting)")
+    else:
+        reasons.append("Crack spread neutral (current ≈ mean)")   
 
     if z_score > 1.5:
         score += WEIGHTS["z_score"]; reasons.append("WTI undervalued vs Brent (Arbitrage Force)")
+    elif z_score < -1.5:
+        score -= WEIGHTS["z_score"]; reasons.append("WTI overvalued vs Brent (Bearish Pressure)")
+    else:
+        reasons.append("Z-score neutral (-1.5 < z < 1.5)")
 
     if net_pos < -10000:
         score += WEIGHTS["cot_squeeze"]; reasons.append("Hedge funds trapped in shorts (Short Squeeze)")
+    elif net_pos > 10000:
+        score -= WEIGHTS["cot_squeeze"]; reasons.append("Hedge funds heavily long (Long Squeeze)")
+    else: 
+        reasons.append("COT net position neutral (-10k |net_pos| < 10k)")
 
     if inv_shock < 0:
         score += WEIGHTS["inv_surprise"]; reasons.append("Inventory Surprise: Actual < Forecast (Bullish Shock)")
+    elif inv_shock > 0:
+        score -= WEIGHTS["inv_surprise"]; reasons.append("Inventory Surprise: Actual > Forecast (Bearish Shock)")
+    else:
+        reasons.append("Inventory Surprise neutral (Actual ≈ Forecast)")
 
     if inv_mom < 0:
         score += WEIGHTS["inv_momentum"]; reasons.append("Structural Draw: 4-week inventory trend is bearish")
+    elif inv_mom > 0:
+        score -= WEIGHTS["inv_momentum"]; reasons.append("Structural Build: 4-week inventory trend is bullish")
+    else:
+        reasons.append("Inventory Momentum neutral (4-week avg change ≈ 0)")
 
     if rsi.iloc[-1] > 70:
         score += WEIGHTS["price_overext"]; reasons.append("Warning: Price is Overbought (RSI > 70)")
@@ -140,16 +156,15 @@ def generate_detailed_force_matrix(current_crack, crack_mean, z_score, net_pos, 
     if pd.isna(net_pos): net_pos = 0
     if pd.isna(inv_shock): inv_shock = 0
     if pd.isna(inv_mom): inv_mom = 0
-    if rsi.empty or pd.isna(rsi.iloc[-1]): rsi_val = 50 
+    if rsi.empty or pd.isna(rsi.iloc[-1]): rsi_val = 50
     else: rsi_val = rsi.iloc[-1]
 
-    matrix['Refinery Demand'] = WEIGHTS["crack_spread"] if current_crack > crack_mean else -WEIGHTS["crack_spread"]
-    matrix['Global Arbitrage Force'] = WEIGHTS["z_score"] if z_score > 1.5 else 0
-    matrix['Short Squeeze'] = WEIGHTS["cot_squeeze"] if net_pos < -10000 else 0
-    matrix['Supply Demand Shock'] = WEIGHTS["inv_surprise"] if inv_shock < 0 else -WEIGHTS["inv_surprise"]
-    matrix['Inv Momentum'] = WEIGHTS["inv_momentum"] if inv_mom < 0 else -WEIGHTS["inv_momentum"]
-    
-    matrix['Overextension'] = WEIGHTS["price_overext"] if rsi.iloc[-1] > 80 else 0
+    matrix['Refinery Demand'] = WEIGHTS["crack_spread"] if current_crack > crack_mean else (-WEIGHTS["crack_spread"] if current_crack < crack_mean else 0)
+    matrix['Global Arbitrage Force'] = WEIGHTS["z_score"] if z_score > 1.5 else (-WEIGHTS["z_score"] if z_score < -1.5 else 0)
+    matrix['Short Squeeze'] = WEIGHTS["cot_squeeze"] if net_pos < -10000 else (-WEIGHTS["cot_squeeze"] if net_pos > 10000 else 0)
+    matrix['Supply Demand Shock'] = WEIGHTS["inv_surprise"] if inv_shock < 0 else (-WEIGHTS["inv_surprise"] if inv_shock > 0 else 0)
+    matrix['Inv Momentum'] = WEIGHTS["inv_momentum"] if inv_mom < 0 else (-WEIGHTS["inv_momentum"] if inv_mom > 0 else 0)
+    matrix['Overextension'] = WEIGHTS["price_overext"] if rsi_val > 80 else (-WEIGHTS["price_overext"] if rsi_val < 20 else 0)
 
     total_score = sum(matrix.values())
     verdict = "BULLISH" if total_score >= 6 else "NEUTRAL" if total_score >= 3 else "BEARISH"

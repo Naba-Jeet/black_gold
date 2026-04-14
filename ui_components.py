@@ -406,6 +406,18 @@ def render_quant_page(df):
     fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=600)
     st.plotly_chart(fig, use_container_width=True)
 
+    # --- Liquidity Sweeps Summary ---
+    st.divider()
+    st.subheader("💨 Liquidity Sweep Summary")
+    if not sweeps.empty:
+        st.info(f"**Found {len(sweeps)} liquidity sweep(s) in the displayed period**")
+        sweep_summary = sweeps[['date', 'low', 'high', 'vol']].rename(columns={
+            'date': 'Sweep Date', 'low': 'Sweep Low', 'high': 'Sweep High', 'vol': 'Volume'
+        })
+        st.dataframe(sweep_summary, use_container_width=True)
+    else:
+        st.warning("No liquidity sweeps detected in the current period")
+
     # --- Definitions & Legends ---
     st.divider()
     st.subheader("📚 Quantitative Glossary")
