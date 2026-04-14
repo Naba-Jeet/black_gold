@@ -25,35 +25,35 @@ PRIMARY_KEYS = {
 # External Data Source Links
 DATA_SOURCES = {
     "wti_ohlc": {
-        "label": "WTI OHLC Data",
+        "label": "WTI OHLC Data - Daily",
         "url": "https://in.investing.com/commodities/crude-oil-historical-data"
     },
     "wti_brent_spread": {
-        "label": "WTI-Brent Spread",
+        "label": "WTI-Brent Spread - Daily",
         "url": "https://www.investing.com/commodities/brent-wti-crude-spread-futures-historical-data"
     },
     "api_stocks": {
-        "label": "API Weekly Inventory",
+        "label": "API Weekly Inventory - Wednesday (2:00 AM IST)",
         "url": "https://www.investing.com/economic-calendar/api-weekly-crude-stock-656"
     },
     "eia_stocks": {
-        "label": "EIA Weekly Inventory",
+        "label": "EIA Weekly Inventory - Wednesday (8:00 PM IST)",
         "url": "https://in.investing.com/economic-calendar/eia-crude-oil-inventories-75"
     },
     "cot_data": {
-        "label": "Commitments of Traders Positioning",
+        "label": "Commitments of Traders Positioning - Saturday (1:00 AM IST)",
         "url": "https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalCompressed/index.htm"
     },
     "gasoline_rbob": {
-        "label": "Gasoline RBOB",
+        "label": "Gasoline RBOB - Daily",
         "url": "https://in.investing.com/commodities/gasoline-rbob-historical-data"
     },
     "heating_oil": {
-        "label": "Heating Oil",
+        "label": "Heating Oil - Daily",
         "url": "https://in.investing.com/commodities/heating-oil-historical-data"
     },
     "ovx_data": {
-        "label": "CBOE Crude Oil Volatility (OVX)",
+        "label": "CBOE Crude Oil Volatility (OVX)- Daily",
         "url": "https://in.investing.com/indices/cboe-crude-oil-volatility-historical-data"
     },
 }
