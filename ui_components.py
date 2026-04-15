@@ -6,6 +6,7 @@ import duckdb, io
 from config import DATA_SOURCES, PRIMARY_KEYS
 from data_engine import validate_df, normalize_columns
 from quant_engine import calculate_z_score, calculate_volume_profile, generate_detailed_force_matrix, detect_liquidity_sweeps_v2, calculate_inventory_shock, calculate_inv_momentum, calculate_rsi, calculate_vwap, calculate_sr_levels
+from strategy import calculate_volume_profile_signals, generate_vp_signals, calculate_vp_targets_sl
 
 
 # ==========================================
@@ -519,4 +520,350 @@ def render_quant_page(df):
         - **Liquidity Sweep:** A price move that breaks a significant low or high to trigger stop-losses, followed by an immediate reversal. This indicates 'Institutional Absorption'.
         - **Support/Resistance:** The price levels where a coin/commodity historically has difficulty breaking through.
         - **Candlestick (OHLC):** Open, High, Low, and Close prices for the day.
+        """)
+
+
+def render_volume_profile_page(df):
+    """
+    Volume Profile Analysis Page - Leading S/R Detection
+    Shows: POC, VAH/VAL, HVN, LVN, Volume Gaps, Trading Signals
+    """
+    st.title("📊 Volume Profile - Leading Support/Resistance")
+    st.markdown("Institutional footprint analysis using volume-at-price. **Leading** indicators show where price will move, not where it was.")
+
+    if df is None or df.empty or len(df) < 10:
+        st.warning("⚠️ Insufficient data for Volume Profile analysis. Need at least 10 bars.")
+        return
+
+    # Sidebar: User Inputs
+    st.sidebar.markdown("### ⚙️ Volume Profile Settings")
+    lookback_bars = st.sidebar.number_input(
+        "Lookback Period (bars)",
+        min_value=5,
+        max_value=200,
+        value=20,
+        step=5,
+        help="Number of bars to use for volume profile calculation. More bars = more significant levels."
+    )
+
+    bin_count = st.sidebar.slider(
+        "Price Bins",
+        min_value=20,
+        max_value=100,
+        value=50,
+        help="Number of price levels for volume histogram. Higher = more precision."
+    )
+
+    # Calculate Volume Profile
+    vp_data = calculate_volume_profile_signals(df, window=lookback_bars, bins=bin_count)
+
+    if vp_data.get('poc') == 0:
+        st.error("Volume Profile calculation failed. Check data quality.")
+        return
+
+    # Current price
+    current_price = df['price'].iloc[-1]
+    latest_date = df['date'].iloc[-1] if 'date' in df.columns else "N/A"
+
+    # Filter df to lookback period for chart (show 1.5x for context)
+    df_chart = df.tail(int(lookback_bars * 1.5)).copy()
+
+    st.info(f"**Latest Close:** ${current_price:.2f} | **Data through:** {latest_date} | **Lookback:** {lookback_bars} bars")
+
+    st.divider()
+
+    # Top Row: Key Levels
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+
+        if vp_data.get('poc_migration') == 'rising':
+            st.metric(
+                label = "POC (Point of Control)",
+                value = f"${vp_data['poc']:.2f}",
+                delta=f"{vp_data.get('poc_migration', 'rising').upper()}",
+                delta_color="green", delta_arrow="up",
+                help="Price level with highest volume - institutional fair value. POC is rising → price is being bought up"
+                )            
+        elif vp_data.get('poc_migration') == 'falling':
+            st.metric(
+                label = "POC (Point of Control)",
+                value = f"${vp_data['poc']:.2f}",
+                delta=f"{vp_data.get('poc_migration', 'falling').upper()}",
+                delta_color="red", delta_arrow="down",
+                help="Price level with highest volume - institutional fair value. POC is falling → price is being sold down"
+            )
+        else:
+            st.metric(
+                label = "POC (Point of Control)",
+                value = f"${vp_data['poc']:.2f}",
+                delta=f"{vp_data.get('poc_migration', 'stable').upper()}",
+                delta_color="blue", delta_arrow="off",
+                help="Price level with highest volume - institutional fair value. POC is stable → price is balanced"
+            )
+
+    with col2:
+
+        st.metric(
+            "VAH (Value Area High)",
+            f"${vp_data['vah']:.2f}",
+            delta="Resistance",
+            delta_color="red", delta_arrow="down",
+            help="Upper bound of 70% value area"
+        )
+
+    with col3:
+        st.metric(
+            "VAL (Value Area Low)",
+            f"${vp_data['val']:.2f}",
+            delta="Support",
+            delta_color="green",delta_arrow="up",
+            help="Lower bound of 70% value area"
+        )
+
+    with col4:
+        position = vp_data.get('current_price_position', 'unknown')
+        st.metric(
+            "Price Position",
+            position.replace('_', ' ').capitalize(),
+            delta="Current",
+            delta_color="blue", delta_arrow="off",
+            help=f"Price relative to POC/Value Area"
+        )
+
+    st.divider()
+
+    # Main Chart: Volume Profile + Price
+    st.subheader("📈 Volume Profile Chart")
+
+    fig = go.Figure()
+
+    # Candlestick
+    fig.add_trace(go.Candlestick(
+        x=df_chart['date'] if 'date' in df_chart.columns else df_chart.index,
+        open=df_chart['open'], high=df_chart['high'], low=df_chart['low'], close=df_chart['price'],
+        name="Price",
+        increasing_line_color='green',
+        decreasing_line_color='red'
+    ))
+
+    # POC Line
+    fig.add_hline(
+        y=vp_data['poc'],
+        line_color="yellow",
+        line_width=2,
+        annotation_text=f"POC ${vp_data['poc']:.2f}",
+        annotation_position="right"
+    )
+
+    # VAH/VAL Lines
+    fig.add_hline(
+        y=vp_data['vah'],
+        line_color="orange",
+        line_dash="dash",
+        annotation_text=f"VAH ${vp_data['vah']:.2f}",
+        annotation_position="right"
+    )
+    fig.add_hline(
+        y=vp_data['val'],
+        line_color="orange",
+        line_dash="dash",
+        annotation_text=f"VAL ${vp_data['val']:.2f}",
+        annotation_position="right"
+    )
+
+    # HVN Lines
+    for i, hvn in enumerate(vp_data.get('hvn', [])[:5]):
+        fig.add_hline(
+            y=hvn,
+            line_color="green",
+            line_dash="dot",
+            opacity=0.5,
+            annotation_text=f"HVN{i+1}" if len(vp_data.get('hvn', [])) <= 5 else None
+        )
+
+    # LVN Lines
+    for i, lvn in enumerate(vp_data.get('lvn', [])[:5]):
+        fig.add_hline(
+            y=lvn,
+            line_color="red",
+            line_dash="dot",
+            opacity=0.5,
+            annotation_text=f"LVN{i+1}" if len(vp_data.get('lvn', [])) <= 5 else None
+        )
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=600,
+        xaxis_rangeslider_visible=False,
+        title=f"Volume Profile Analysis - {lookback_bars} bars"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Volume Profile Histogram (Right Panel)
+    st.subheader("📊 Volume-at-Price Distribution")
+
+    if vp_data.get('price_bins') and vp_data.get('volume_bins'):
+        vol_fig = go.Figure()
+
+        vol_fig.add_trace(go.Bar(
+            orientation='h',
+            y=vp_data['price_bins'],
+            x=vp_data['volume_bins'],
+            name='Volume',
+            marker_color='blue',
+            opacity=0.6
+        ))
+
+        # Add POC marker
+        vol_fig.add_hline(
+            y=vp_data['poc'],
+            line_color="yellow",
+            line_width=3,
+            annotation_text="POC"
+        )
+
+        # Add VAH/VAL
+        vol_fig.add_hline(y=vp_data['vah'], line_color="orange", line_dash="dash", annotation_text="VAH")
+        vol_fig.add_hline(y=vp_data['val'], line_color="orange", line_dash="dash", annotation_text="VAL")
+
+        # Add current price
+        vol_fig.add_hline(
+            y=current_price,
+            line_color="white",
+            line_width=2,
+            annotation_text="Current"
+        )
+
+        vol_fig.update_layout(
+            template="plotly_dark",
+            height=500,
+            xaxis_title="Volume",
+            yaxis_title="Price ($) ➡️",
+            showlegend=False
+        )
+
+        st.plotly_chart(vol_fig, use_container_width=True)
+
+    st.divider()
+
+    # Trading Signals
+    st.subheader("🎯 Volume Profile Signals")
+
+    signals = generate_vp_signals(vp_data, current_price)
+
+    if signals:
+        for i, signal in enumerate(signals):
+            color = "green" if signal['direction'] == 'bullish' else "red" if signal['direction'] == 'bearish' else "blue"
+            icon = "📈" if signal['direction'] == 'bullish' else "📉" if signal['direction'] == 'bearish' else "⚠️"
+
+            st.markdown(f"**{icon} Signal {i+1}: {signal['type'].upper()}**")
+            col_sig1, col_sig2 = st.columns([3, 1])
+            with col_sig1:
+                st.markdown(f"{signal['description']}")
+            with col_sig2:
+                st.badge(signal['strength'].upper(), color=color)
+            st.markdown("---")
+    else:
+        st.info("No strong signals at current price level. Market in balance.")
+
+    st.divider()
+
+    # Targets & Stop Loss Calculator
+    st.subheader("🎯 Target & Stop Loss Calculator")
+
+    target_col1, target_col2 = st.columns(2)
+
+    with target_col1:
+        trade_direction = st.selectbox(
+            "Trade Direction",
+            ["long", "short"],
+            help="Select your intended trade direction"
+        )
+
+    with target_col2:
+        entry_price = st.number_input(
+            "Entry Price",
+            min_value=0.0,
+            value=current_price,
+            step=0.01,
+            help="Your planned entry price"
+        )
+
+    if st.button("Calculate Targets & Stop", type="primary"):
+        ts_data = calculate_vp_targets_sl(vp_data, entry_price, trade_direction)
+
+        if ts_data['targets']:
+            st.success("✅ Calculated levels based on Volume Profile")
+
+            t_col1, t_col2, t_col3 = st.columns(3)
+
+            for target_name, target_price, target_reason in ts_data['targets']:
+                if target_name == "T1":
+                    t_col1.metric(
+                        f"{target_name} - {target_reason}",
+                        f"${target_price:.2f}",
+                        delta=f"{((target_price - entry_price) / entry_price * 100):.2f}%" if trade_direction == 'long' else f"{((entry_price - target_price) / entry_price * 100):.2f}%",
+                        delta_color="green"
+                    )
+                elif target_name == "T2":
+                    t_col2.metric(
+                        f"{target_name} - {target_reason}",
+                        f"${target_price:.2f}",
+                        delta=f"{((target_price - entry_price) / entry_price * 100):.2f}%" if trade_direction == 'long' else f"{((entry_price - target_price) / entry_price * 100):.2f}%",
+                        delta_color="green"
+                    )
+                elif target_name == "T3":
+                    t_col3.metric(
+                        f"{target_name} - {target_reason}",
+                        f"${target_price:.2f}",
+                        delta=f"{((target_price - entry_price) / entry_price * 100):.2f}%" if trade_direction == 'long' else f"{((entry_price - target_price) / entry_price * 100):.2f}%",
+                        delta_color="green"
+                    )
+
+            if ts_data['stop_loss'] > 0:
+                ts_data_calculated = calculate_vp_targets_sl(vp_data, entry_price, trade_direction)
+
+                st.metric(
+                    "🛑 Stop Loss",
+                    f"${ts_data_calculated['stop_loss']:.2f}",
+                    delta=f"{((entry_price - ts_data_calculated['stop_loss']) / entry_price * 100):.2f}% risk" if trade_direction == 'long' else f"{((ts_data_calculated['stop_loss'] - entry_price) / entry_price * 100):.2f}% risk",
+                    delta_color="red"
+                )
+
+                if ts_data_calculated.get('risk_reward', 0) > 0:
+                    st.info(f"**Risk/Reward Ratio:** {ts_data_calculated['risk_reward']:.2f}")
+        else:
+            st.warning("Could not calculate targets. Insufficient Volume Profile data.")
+
+    st.divider()
+
+    # Educational Section
+    with st.expander("📚 How to Read Volume Profile"):
+        st.markdown("""
+        ### Volume Profile Components
+
+        | Component | What It Is | How To Trade |
+        |-----------|------------|--------------|
+        | **POC (Point of Control)** | Price level with highest traded volume | Magnet - price gravitates here. Support when above, resistance when below. |
+        | **VAH/VAL (Value Area High/Low)** | 70% of volume transacted in this range | Mean reversion zones. Long at VAL, short at VAH. Breakout = momentum trade. |
+        | **HVN (High Volume Nodes)** | Local volume peaks | Institutional footprint. Strong support/resistance. |
+        | **LVN (Low Volume Nodes)** | Local volume troughs | Rejection zones. Price moves FAST through these. |
+        | **Volume Gaps** | Near-zero volume between nodes | Unfinished business. Price fills gaps quickly. |
+
+        ### Key Principles
+
+        1. **Volume = Cause, Price = Effect** - Trade FROM volume levels, not TO them
+        2. **POC Migration = Trend** - Rising POC = bullish, Falling POC = bearish
+        3. **HVN = Support/Resistance** - Where big money transacted
+        4. **LVN = Breakout Path** - Price accelerates through low-volume zones
+        5. **Value Area = Fair Price** - 70% of market agrees this is fair value
+
+        ### Leading vs Lagging
+
+        This is **leading** analysis because:
+        - Shows where institutions WILL move price (to high-volume nodes)
+        - Not based on past price reactions (like traditional S/R)
+        - Volume reveals intent before price movement
         """)

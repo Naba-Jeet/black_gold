@@ -1,6 +1,6 @@
 # app.py
 import streamlit as st
-from ui_components import render_ingestion_page, render_terminal_page, render_quant_page, render_data_explorer_page
+from ui_components import render_ingestion_page, render_terminal_page, render_quant_page, render_data_explorer_page, render_volume_profile_page
 from data_engine import load_from_db
 from quant_engine import calculate_crack_spreads
 
@@ -17,10 +17,11 @@ st.sidebar.markdown("---")
 page = st.sidebar.pills(
     "Pages",
     [
-        "🎯 Predictive Terminal", 
-        "📈 Quant Analysis", 
-        "📦 Data Ingestion", 
-        "📊 Data Explorer",    
+        "🎯 Predictive Terminal",
+        "📈 Quant Analysis",
+        "📊 Volume Profile",
+        "📦 Data Ingestion",
+        "📊 Data Explorer",
         "🧮 Logic Center"
     ],
     width=200,
@@ -124,6 +125,15 @@ elif page == "📈 Quant Analysis":
     try:
         wti_ohlc = load_from_db("wti_ohlc")
         render_quant_page(wti_ohlc)
+    except Exception as e:
+        st.error("⚠️ **Data Error**: WTI OHLC data not found.")
+        st.info("Please upload the WTI OHLC file in the Ingestion page.")
+        st.exception(e)
+
+elif page == "📊 Volume Profile":
+    try:
+        wti_ohlc = load_from_db("wti_ohlc")
+        render_volume_profile_page(wti_ohlc)
     except Exception as e:
         st.error("⚠️ **Data Error**: WTI OHLC data not found.")
         st.info("Please upload the WTI OHLC file in the Ingestion page.")
