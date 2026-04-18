@@ -784,7 +784,7 @@ def render_volume_profile_page(df):
 
     with target_col2:
         entry_price = st.number_input(
-            "Entry Price",
+            "Recommended Entry Price",
             min_value=0.0,
             value=current_price,
             step=0.01,

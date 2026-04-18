@@ -1,0 +1,54 @@
+# Multi-stage production build for optimized image size
+
+# Stage 1: Builder
+FROM python:3.11-slim as builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install dependencies to a folder
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# Stage 2: Runtime (much smaller)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install only runtime dependencies (curl for health check)
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python dependencies from builder
+COPY --from=builder /root/.local /root/.local
+
+# Ensure scripts are in PATH
+ENV PATH=/root/.local/bin:$PATH
+
+# Copy application code
+COPY . .
+
+# Create non-root user for security
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Expose port
+EXPOSE 8501
+
+# Health check
+HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+
+# Run app with optimizations
+CMD ["streamlit", "run", "app.py", \
+     "--server.port=8501", \
+     "--server.address=0.0.0.0", \
+     "--server.enableXsrfProtection=false", \
+     "--logger.level=info", \
+     "--client.showErrorDetails=false"]
