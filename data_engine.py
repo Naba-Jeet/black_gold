@@ -18,6 +18,22 @@ def normalize_columns(df):
     df.columns = [_norm(c) for c in df.columns]
     return df
 
+def standardize_dates(df, date_columns=None):
+    """Standardize all date columns to yyyy-mm-dd format. NaN dates are kept as NaN (not converted to 'nan' string)."""
+    if date_columns is None:
+        date_columns = ['date', 'release_date', 'as_of_date_in_form_yymmdd']
+    
+    for col in date_columns:
+        if col in df.columns:
+            try:
+                dt_series = pd.to_datetime(df[col], errors='coerce')
+                df[col] = dt_series.dt.strftime('%Y-%m-%d')
+                df.loc[dt_series.isna(), col] = pd.NA
+            except Exception:
+                pass
+    
+    return df
+
 def clean_volume(val):
     if isinstance(val, str):
         val = val.upper().replace(',', '')
@@ -40,26 +56,34 @@ def upsert_to_duckdb(df, table_name):
     """
     Upserts data into DuckDB.
     Inserts new records, updates changed records, ignores identical ones.
+    Standardizes all dates to yyyy-mm-dd format before storing.
     """
-    conn = duckdb.connect(DB_FILE)
+    df = df.copy()
+    df = standardize_dates(df)
     pk = PRIMARY_KEYS[table_name]
+    df = df.dropna(subset=[pk])
 
-    # 1. Generate hash_key for the new data
+    if df.empty:
+        return "No valid data to upsert (all rows have invalid keys)"
+
+    conn = duckdb.connect(DB_FILE)
     df['hash_key'] = df.apply(generate_row_hash, axis=1)
 
-    # 2. Check if table exists
     table_exists = conn.execute(f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{table_name}'").fetchone()[0]
 
     if not table_exists:
-        # First time upload: Just save and exit
         conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
         conn.close()
         return "Inserted as new table"
 
-    # 3. Load existing data to compare
+    table_cols = conn.execute(f"PRAGMA table_info('{table_name}')").df()['name'].tolist()
+
+    if 'hash_key' not in table_cols:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN hash_key VARCHAR")
+        table_cols.append('hash_key')
+
     existing_df = conn.execute(f"SELECT {pk}, hash_key FROM {table_name}").df()
 
-    # 4. Identify rows to update or insert
     merged = pd.merge(df, existing_df, on=pk, how='left', suffixes=('', '_old'))
     changed_mask = (merged['hash_key_old'].isna()) | (merged['hash_key'] != merged['hash_key_old'])
     df_to_upsert = merged[changed_mask].drop(columns=['hash_key_old'])
@@ -68,7 +92,12 @@ def upsert_to_duckdb(df, table_name):
         conn.close()
         return "No changes detected"
 
-    # 5. Execute Upsert in DuckDB
+    for col in table_cols:
+        if col not in df_to_upsert.columns:
+            df_to_upsert[col] = pd.NA
+
+    df_to_upsert = df_to_upsert[table_cols]
+
     keys_to_delete = df_to_upsert[pk].tolist()
 
     if isinstance(keys_to_delete[0], str):
@@ -77,13 +106,16 @@ def upsert_to_duckdb(df, table_name):
         keys_str = ",".join(map(str, keys_to_delete))
 
     conn.execute(f"DELETE FROM {table_name} WHERE {pk} IN ({keys_str})")
-    conn.execute(f"INSERT INTO {table_name} SELECT * FROM df_to_upsert")
-    conn.close()
 
+    quoted_cols = ", ".join([f'"{c}"' for c in table_cols])
+    conn.register("df_to_upsert_aligned", df_to_upsert)
+    conn.execute(f"INSERT INTO {table_name} ({quoted_cols}) SELECT {quoted_cols} FROM df_to_upsert_aligned")
+
+    conn.close()
     return f"Upserted {len(df_to_upsert)} rows"
 
 def load_from_db(table_name):
-    """Loads data from DuckDB and ensures it is sorted by date ascending."""
+    """Loads data from DuckDB, ensures dates are in yyyy-mm-dd format, and sorts by date ascending."""
     conn = duckdb.connect(DB_FILE)
     df = conn.execute(f"SELECT * FROM {table_name}").df()
     conn.close()
@@ -94,7 +126,8 @@ def load_from_db(table_name):
     date_col = PRIMARY_KEYS.get(table_name)
 
     if date_col and date_col in df.columns:
-        df[date_col] = pd.to_datetime(df[date_col], dayfirst=True, errors='coerce')
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        df[date_col] = df[date_col].dt.strftime('%Y-%m-%d')
         df = df.sort_values(by=date_col, ascending=True).reset_index(drop=True)
 
     return df

@@ -150,41 +150,53 @@ elif page == "🧮 Logic Center":
         **Why it matters:** When the crack spread is wide (high), refineries are highly profitable → they buy more crude oil to maximize output → demand increases → WTI price rises. When narrow (low), refineries cut production → demand falls → WTI price falls.
         
         **Formula breakdown:** 
-        $C_s = 2R + H - 3W$
-        - 2 barrels of RBOB gasoline
-        - 1 barrel of heating oil
-        - Minus 3 barrels of WTI crude (typical yield from one barrel)
+         $$C_s = \\frac{(2R \\times G) + (H \\times G)}{3} - W$$
+         where:
+         - $R$ = RBOB gasoline price
+         - $H$ = Heating oil price
+         - $G$ = Gallons per barrel (42 gallons/barrel standard)
+         - $W$ = WTI crude price
+         
+         - 2 barrels of RBOB gasoline × 42 gallons/barrel
+         - 1 barrel of heating oil × 42 gallons/barrel
+         - Divided by 3 (typical refinery yield from one barrel of WTI crude)
+         - Minus current WTI price per barrel
         
-        **How to interpret:**
-        - **Crack > Historical mean** → Refinery margins are expanding → Bullish for crude (refineries incentivized to buy)
-        - **Crack < Historical mean** → Margins contracting → Bearish for crude (refineries reducing production)
-        - **Extreme highs** → Unsustainable; refineries will eventually reduce runs when margins normalize
+         **How to interpret:**
+         - **Crack > $20/barrel** → Refineries highly profitable with huge demand → Strong bullish signal
+         - **$15-20/barrel** → Historical average range → Refinery margins normal
+         - **$10-15/barrel** → Below average → Refinery margins compressed
+         - **Crack < $0** → Refineries unprofitable, weak demand → Strong bearish signal
         
         **Trading signal:** Crack Spread = +2 weight in Force Matrix (contributes to bullish score when expanding)
         
-        ### 2. The Arbitrage Force (Z-Score)
-        **What it is:** Measures how far the Brent-WTI spread has deviated from its historical average, expressed in standard deviations.
-        
-        **Why it matters:** When WTI is much cheaper than Brent, arbitrageurs (traders) can profit by buying WTI and selling Brent → this buying pressure lifts WTI prices. When WTI is expensive vs Brent, the reverse happens.
-        
-        **Formula breakdown:** 
-        $$z = \\frac{(B - W) - \\mu}{\\sigma}$$
-        - B = Brent price
-        - W = WTI price
-        - μ = historical mean of the spread
-        - σ = standard deviation
-        
-        **How to interpret:**
-        - **z > +1.5** → WTI is cheap vs Brent by 1.5+ standard deviations → Arbitrage opportunity (buy WTI) → Bullish
-        - **z < -1.5** → WTI is expensive vs Brent by 1.5+ standard deviations → Arb opportunity (sell WTI) → Bearish
-        - **-1.5 < z < +1.5** → Spread is normal, no extreme mispricing → Neutral
-        
-        **Trading signal:** Z-Score = +3 weight in Force Matrix (strongest contributor to directional moves)
-                
-        **Formula:**
-        $$z = \\frac{(B - W) - \\mu}{\\sigma}$$
-        where $B$ = Brent, $W$ = WTI, $\\mu$ = historical mean, $\\sigma$ = standard deviation
-        
+         ### 2. The Arbitrage Force (Z-Score)
+         **What it is:** Measures how far the Brent-WTI spread has deviated from its 30-day rolling average, expressed in standard deviations. Uses a rolling 30-day lookback window (40-80 day range is typical in industry; 30-day provides faster mean reversion signals).
+         
+         **Why it matters:** When WTI is much cheaper than Brent, arbitrageurs (traders) can profit by buying WTI and selling Brent → this buying pressure lifts WTI prices. When WTI is expensive vs Brent, the reverse happens.
+         
+         **Historical Benchmarks:**
+         - Historical Low: **$-5.00**
+         - Historical Mean: **$3.50**
+         - Historical High: **$12.00**
+         
+         **What Drives the Spread:**
+         - **Spread Widens (Brent > WTI) When:** European/Asian demand exceeds US, US crude exports face bottlenecks, Cushing storage levels high, Geopolitical issues affect Brent
+         - **Spread Narrows When:** US exports increase strongly, European refinery maintenance, Cushing inventories draw down, US becomes swing supplier
+         
+         **Formula breakdown:** 
+         $$z = \\frac{S - \\mu_{30d}}{\\sigma_{30d}}$$
+         - $S$ = Current Brent-WTI spread
+         - $\\mu_{30d}$ = 30-day rolling mean of spread
+         - $\\sigma_{30d}$ = 30-day rolling standard deviation
+         
+         **How to interpret:**
+         - **z > +1.5** → WTI is cheap vs Brent by 1.5+ standard deviations → Arbitrage opportunity (buy WTI) → Bullish
+         - **z < -1.5** → WTI is expensive vs Brent by 1.5+ standard deviations → Arb opportunity (sell WTI) → Bearish
+         - **-1.5 < z < +1.5** → Spread is normal, no extreme mispricing → Neutral
+         
+         **Trading signal:** Z-Score = +3 weight in Force Matrix (strongest contributor to directional moves)
+         
         ### 3. The Sentiment Squeeze (COT Net Position)
         **What it is:** The net positioning of large speculators (Managed Money) in WTI futures — the difference between their long positions and short positions.
         

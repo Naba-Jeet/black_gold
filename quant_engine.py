@@ -1,7 +1,7 @@
 # quant_engine.py
 import pandas as pd
 import numpy as np
-from config import WEIGHTS
+from config import WEIGHTS, PER_BARREL
 
 def calculate_crack_spreads(wti, rbob, ho):
     merged = pd.merge(wti[['date', 'price']], rbob[['date', 'price']], on='date', how='inner', suffixes=('_wti', '_rbob'))
@@ -11,15 +11,28 @@ def calculate_crack_spreads(wti, rbob, ho):
     if merged.empty:
         return pd.DataFrame(columns=['date', 'price_wti', 'price_rbob', 'price_ho', 'crack_spread'])
     
-    merged['crack_spread'] = (2 * merged['price_rbob']) + (1 * merged['price_ho']) - (3 * merged['price_wti'])
+    merged['crack_spread'] = ((2 * merged['price_rbob'] * PER_BARREL) + (1 * merged['price_ho'] * PER_BARREL)) / 3 - merged['price_wti']
     return merged
 
-def calculate_z_score(brent_spr):
-    price = brent_spr['price']
-    std = price.std(ddof=0)  # Population std for z-score
-    if std == 0 or pd.isna(std):
-        return 0  # No volatility = neutral
-    return (price.iloc[-1] - price.mean()) / std
+def calculate_z_score(brent_spr, lookback_window=30):
+    df = brent_spr.copy()
+    price = -df['price']
+    
+    if len(price) < lookback_window:
+        lookback_window = max(10, len(price) - 1)
+    
+    rolling_mean = price.rolling(window=lookback_window, min_periods=1).mean()
+    rolling_std = price.rolling(window=lookback_window, min_periods=1).std(ddof=0)
+    
+    rolling_std = rolling_std.replace(0, np.nan)
+    z_score = (price - rolling_mean) / rolling_std
+    
+    last_z = z_score.iloc[-1]
+    
+    if pd.isna(last_z):
+        last_z = 0.0
+    
+    return float(last_z)
 
 
 def detect_liquidity_sweeps_v2(df):
@@ -330,3 +343,133 @@ def calculate_vol_premium(wti_df, ovx_df, rv_window=30):
             'signal': 'ERROR',
             'recommendation': f'Volatility calculation error: {str(e)}'
         }
+
+def generate_2_3_day_strategy(current_crack, crack_mean, z_score, net_pos, inv_shock, inv_mom, rsi):
+    """
+    Generate a 2-3 day trading strategy based on composite indicators.
+    Returns dict with strategy, confidence, and key levels.
+    """
+    bullish_signals = 0
+    bearish_signals = 0
+    confidence_score = 0
+    
+    strategy_details = []
+    
+    crack_signal = "NEUTRAL"
+    if current_crack > crack_mean + 5:
+        bullish_signals += 2
+        crack_signal = "STRONG BUY"
+        strategy_details.append("✅ Crack spread expanding → Refineries buying crude")
+    elif current_crack > crack_mean:
+        bullish_signals += 1
+        crack_signal = "BUY"
+        strategy_details.append("📈 Crack spread above average → Moderate bullish")
+    elif current_crack < crack_mean - 5:
+        bearish_signals += 2
+        crack_signal = "STRONG SELL"
+        strategy_details.append("❌ Crack spread collapsed → Refineries reducing demand")
+    elif current_crack < crack_mean:
+        bearish_signals += 1
+        crack_signal = "SELL"
+        strategy_details.append("📉 Crack spread below average → Moderate bearish")
+    else:
+        strategy_details.append("🟡 Crack spread neutral")
+    
+    z_score_signal = "NEUTRAL"
+    if z_score > 1.5:
+        bullish_signals += 2
+        z_score_signal = "STRONG BUY"
+        strategy_details.append("✅ WTI deeply undervalued vs Brent → Arbitrage opportunity")
+    elif z_score > 0.5:
+        bullish_signals += 1
+        z_score_signal = "BUY"
+        strategy_details.append("📈 WTI moderately undervalued → Light arbitrage bias")
+    elif z_score < -1.5:
+        bearish_signals += 2
+        z_score_signal = "STRONG SELL"
+        strategy_details.append("❌ WTI expensive vs Brent → Mean reversion down")
+    elif z_score < -0.5:
+        bearish_signals += 1
+        z_score_signal = "SELL"
+        strategy_details.append("📉 WTI moderately expensive → Light mean reversion bias")
+    else:
+        strategy_details.append("🟡 Brent-WTI spread neutral")
+    
+    squeeze_signal = "NEUTRAL"
+    if net_pos < -15000:
+        bullish_signals += 2
+        squeeze_signal = "STRONG BUY"
+        strategy_details.append("✅ Heavy short positioning → Squeeze potential (2-3 days)")
+    elif net_pos < -5000:
+        bullish_signals += 1
+        squeeze_signal = "BUY"
+        strategy_details.append("📈 Moderate short bias → Light squeeze pressure")
+    elif net_pos > 15000:
+        bearish_signals += 2
+        squeeze_signal = "STRONG SELL"
+        strategy_details.append("❌ Heavy long positioning → Liquidation risk (2-3 days)")
+    elif net_pos > 5000:
+        bearish_signals += 1
+        squeeze_signal = "SELL"
+        strategy_details.append("📉 Moderate long bias → Light liquidation pressure")
+    else:
+        strategy_details.append("🟡 Balanced COT positioning")
+    
+    inv_shock_signal = "NEUTRAL"
+    if inv_shock < -2000000:
+        bullish_signals += 1
+        inv_shock_signal = "BUY"
+        strategy_details.append("📈 Major inventory draw → Bullish supply shock")
+    elif inv_shock > 2000000:
+        bearish_signals += 1
+        inv_shock_signal = "SELL"
+        strategy_details.append("📉 Major inventory build → Bearish demand shock")
+    else:
+        strategy_details.append("🟡 Inventory shock neutral")
+    
+    rsi_val = float(rsi) if not isinstance(rsi, pd.Series) else float(rsi.iloc[-1])
+    rsi_signal = "NEUTRAL"
+    if rsi_val > 70:
+        bearish_signals += 1
+        rsi_signal = "OVERBOUGHT"
+        strategy_details.append("🔴 RSI > 70 → Overbought, pullback likely in 2-3 days")
+    elif rsi_val < 30:
+        bullish_signals += 1
+        rsi_signal = "OVERSOLD"
+        strategy_details.append("🟢 RSI < 30 → Oversold, rebound likely in 2-3 days")
+    else:
+        strategy_details.append("🟡 RSI neutral (30-70 range)")
+    
+    total_signals = bullish_signals + bearish_signals
+    if total_signals > 0:
+        confidence_score = max(bullish_signals, bearish_signals) / total_signals
+    else:
+        confidence_score = 0.5
+    
+    if bullish_signals > bearish_signals:
+        direction = "🟢 BULLISH"
+        position = "LONG / BUY"
+        timeframe = "Next 2-3 days: Expect upside pressure"
+    elif bearish_signals > bullish_signals:
+        direction = "🔴 BEARISH"
+        position = "SHORT / SELL"
+        timeframe = "Next 2-3 days: Expect downside pressure"
+    else:
+        direction = "🟡 NEUTRAL"
+        position = "FLAT / RANGE-BOUND"
+        timeframe = "Next 2-3 days: Await break of key levels"
+    
+    return {
+        "direction": direction,
+        "position": position,
+        "timeframe": timeframe,
+        "confidence": round(confidence_score * 100, 1),
+        "bullish_signals": bullish_signals,
+        "bearish_signals": bearish_signals,
+        "crack_signal": crack_signal,
+        "z_score_signal": z_score_signal,
+        "squeeze_signal": squeeze_signal,
+        "inv_shock_signal": inv_shock_signal,
+        "rsi_signal": rsi_signal,
+        "strategy_details": strategy_details
+    }

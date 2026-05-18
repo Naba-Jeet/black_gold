@@ -1,5 +1,7 @@
 DB_FILE = "crude_flow.db"
 
+PER_BARREL = 42  # Gallons per barrel (standard unit for crack spread calculations)
+
 REQUIRED_SCHEMAS = {
     "wti_ohlc": ["date", "price", "open", "high", "low", "vol"],
     "wti_brent_spread": ["date", "price"],

@@ -4,8 +4,8 @@ import plotly.graph_objects as go
 import pandas as pd
 import duckdb, io
 from config import DATA_SOURCES, PRIMARY_KEYS
-from data_engine import validate_df, normalize_columns
-from quant_engine import calculate_z_score, calculate_volume_profile, generate_detailed_force_matrix, detect_liquidity_sweeps_v2, calculate_inventory_shock, calculate_inv_momentum, calculate_rsi, calculate_vwap, calculate_sr_levels
+from data_engine import validate_df, normalize_columns, standardize_dates
+from quant_engine import calculate_z_score, calculate_volume_profile, generate_detailed_force_matrix, detect_liquidity_sweeps_v2, calculate_inventory_shock, calculate_inv_momentum, calculate_rsi, calculate_vwap, calculate_sr_levels, generate_2_3_day_strategy
 from strategy import calculate_volume_profile_signals, generate_vp_signals, calculate_vp_targets_sl
 
 
@@ -33,6 +33,7 @@ def render_ingestion_page():
             if uploaded_file:
                 df = pd.read_csv(io.StringIO(uploaded_file.getvalue().decode('utf-8')))
                 df = normalize_columns(df)
+                df = standardize_dates(df)
                 is_valid, msg = validate_df(df, key)
 
                 if is_valid:
@@ -123,6 +124,26 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
     """
     st.title("📶 Crude Flow Predictive Terminal")
 
+    st.divider()
+    
+    col_date1, col_date2, col_spacing = st.columns([1.5, 1.5, 2])
+    
+    with col_date1:
+        start_date = st.date_input(
+            "📅 Start Date",
+            value=pd.Timestamp.now() - pd.Timedelta(days=30),
+            help="Filter data from this date onwards"
+        )
+    
+    with col_date2:
+        end_date = st.date_input(
+            "📅 End Date",
+            value=pd.Timestamp.now(),
+            help="Filter data up to this date"
+        )
+    
+    st.divider()
+
     # status_cols = st.columns(8)
     # dataset_names = ["WTI OHLC", "Brent Spread", "COT", "RBOB", "HO", "EIA", "Cracks"]
     # for idx, (name, avail_key) in enumerate(zip(dataset_names, ["wti", "brent_spr", "cot", "rbob", "ho", "eia", "cracks"])):
@@ -139,61 +160,77 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
         st.info("Navigate to **Data Ingestion** to upload CSV files.")
         return
     
-    # Filter data to last X weeks
+    # Filter data to date range
     from datetime import timedelta
     
-    def filter_by_weeks(df, date_col, weeks):
+    def filter_by_date_range(df, date_col, start_date, end_date):
         if df.empty:
             return df
-        max_date = pd.to_datetime(df[date_col]).max()
-        cutoff_date = max_date - timedelta(weeks=weeks)
-        return df[pd.to_datetime(df[date_col]) >= cutoff_date].reset_index(drop=True)
+        df_copy = df.copy()
+        df_copy[date_col] = pd.to_datetime(df_copy[date_col])
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date)
+        return df_copy[(df_copy[date_col] >= start_dt) & (df_copy[date_col] <= end_dt)].reset_index(drop=True)
     
-    # Apply filters to available datasets
-    wti_f = filter_by_weeks(datasets.get('wti'), 'date', weeks_lookback)
-    brent_spr_f = filter_by_weeks(datasets.get('brent_spr'), 'date', weeks_lookback)
-    cot_f = filter_by_weeks(datasets.get('cot'), 'as_of_date_in_form_yymmdd', weeks_lookback)
-    cracks_f = filter_by_weeks(datasets.get('cracks'), 'date', weeks_lookback)
-    eia_f = filter_by_weeks(datasets.get('eia'), 'release_date', weeks_lookback)
+    # Apply filters to available datasets using date range
+    wti_f = filter_by_date_range(datasets.get('wti'), 'date', start_date, end_date)
+    brent_spr_f = filter_by_date_range(datasets.get('brent_spr'), 'date', start_date, end_date)
+    cot_f = filter_by_date_range(datasets.get('cot'), 'as_of_date_in_form_yymmdd', start_date, end_date)
+    cracks_f = filter_by_date_range(datasets.get('cracks'), 'date', start_date, end_date)
+    eia_f = filter_by_date_range(datasets.get('eia'), 'release_date', start_date, end_date)
     
     # Initialize metrics dict (only calculate if data exists)
     metrics = {}
 
+    # Helper: use date-filtered data, fall back to full dataset if filtered window is empty
+    def _src(filtered, full_key):
+        if filtered is not None and not filtered.empty:
+            return filtered
+        return datasets.get(full_key)
+
     # 1. Crack Spread
-    if availability['cracks'] and cracks_f is not None:
-        metrics['current_crack'] = cracks_f['crack_spread'].iloc[-1]
-        metrics['crack_mean'] = cracks_f['crack_spread'].mean()
+    cracks_src = _src(cracks_f, 'cracks')
+    if availability['cracks'] and cracks_src is not None and not cracks_src.empty:
+        metrics['current_crack'] = cracks_src['crack_spread'].iloc[-1]
+        metrics['crack_mean'] = cracks_src['crack_spread'].mean()
     else:
         metrics['current_crack'] = 0
         metrics['crack_mean'] = 0
 
-    # 2. COT Squeeze
-    if availability['cot'] and cot_f is not None:
-        metrics['net_pos'] = cot_f['m_money_positions_long_all'].iloc[-1] - cot_f['m_money_positions_short_all'].iloc[-1]
+    # 2. COT Squeeze — COT is weekly; fall back to latest available row if not in window
+    cot_src = _src(cot_f, 'cot')
+    if availability['cot'] and cot_src is not None and not cot_src.empty:
+        metrics['net_pos'] = (
+            cot_src['m_money_positions_long_all'].iloc[-1]
+            - cot_src['m_money_positions_short_all'].iloc[-1]
+        )
     else:
         metrics['net_pos'] = 0
 
-    # 3. S&D Shock
-    if availability['eia'] and eia_f is not None:
-        metrics['inv_shock'] = calculate_inventory_shock(eia_f)
+    # 3. S&D Shock — EIA is weekly; fall back to latest available row if not in window
+    eia_src = _src(eia_f, 'eia')
+    if availability['eia'] and eia_src is not None and not eia_src.empty:
+        metrics['inv_shock'] = calculate_inventory_shock(eia_src)
     else:
         metrics['inv_shock'] = {"value": 0.0, "unit": "BBL", "abs_m": 0.0}
 
-    # 4. Z-Score
-    if availability['brent_spr'] and brent_spr_f is not None:
-        metrics['z_score'] = calculate_z_score(brent_spr_f)
+    # 4. Z-Score — fall back to full spread history if filtered window is empty
+    brent_src = _src(brent_spr_f, 'brent_spr')
+    if availability['brent_spr'] and brent_src is not None and not brent_src.empty:
+        metrics['z_score'] = calculate_z_score(brent_src)
     else:
         metrics['z_score'] = 0
 
-    # 5. Inventory Momentum
-    if availability['eia'] and eia_f is not None:
-        metrics['inv_mom'] = calculate_inv_momentum(eia_f)
+    # 5. Inventory Momentum — use same eia_src fallback computed above
+    if availability['eia'] and eia_src is not None and not eia_src.empty:
+        metrics['inv_mom'] = calculate_inv_momentum(eia_src)
     else:
         metrics['inv_mom'] = 0
 
     # 6. RSI
-    if availability['wti'] and wti_f is not None:
-        metrics['rsi'] = calculate_rsi(wti_f)
+    wti_src = _src(wti_f, 'wti')
+    if availability['wti'] and wti_src is not None and not wti_src.empty:
+        metrics['rsi'] = calculate_rsi(wti_src)
     else:
         metrics['rsi'] = pd.Series([50] * 14)  # Neutral default
 
@@ -203,17 +240,68 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
         metrics['rsi']
     )
 
+    strategy = generate_2_3_day_strategy(
+        metrics['current_crack'], metrics['crack_mean'], metrics['z_score'], 
+        metrics['net_pos'], metrics['inv_shock']['value'], metrics['inv_mom'], 
+        metrics['rsi']
+    )
+
+    st.divider()
+    
+    st.subheader("🎯 2-3 Day Trading Strategy")
+    
+    strat_col1, strat_col2, strat_col3 = st.columns(3)
+    
+    with strat_col1:
+        st.metric(
+            "Direction",
+            strategy['direction'],
+            help="Overall market direction based on composite signals"
+        )
+    
+    with strat_col2:
+        st.metric(
+            "Position",
+            strategy['position'],
+            help="Recommended trading position for next 2-3 days"
+        )
+    
+    with strat_col3:
+        st.metric(
+            "Confidence",
+            f"{strategy['confidence']}%",
+            help=f"Bullish: {strategy['bullish_signals']} | Bearish: {strategy['bearish_signals']}"
+        )
+    
+    st.info(f"**Timeframe:** {strategy['timeframe']}")
+    
+    with st.expander("📊 Signal Analysis Breakdown", expanded=True):
+        strategy_col1, strategy_col2 = st.columns(2)
+        
+        with strategy_col1:
+            st.write("**Individual Signal Ratings:**")
+            st.write(f"🛢️ Crack Spread: **{strategy['crack_signal']}**")
+            st.write(f"📉 Z-Score (Brent-WTI): **{strategy['z_score_signal']}**")
+            st.write(f"🔲 COT Squeeze: **{strategy['squeeze_signal']}**")
+            st.write(f"📦 Inventory Shock: **{strategy['inv_shock_signal']}**")
+            st.write(f"📊 RSI: **{strategy['rsi_signal']}**")
+        
+        with strategy_col2:
+            st.write("**Strategy Drivers:**")
+            for detail in strategy['strategy_details']:
+                st.write(detail)
+    
     st.divider()
 
         # --- VOLATILITY OVERLAY SECTION ---
             # WTI Latest Date
     if availability.get('wti') and datasets.get('wti') is not None and not datasets['wti'].empty:
         wti_latest_date = pd.to_datetime(datasets['wti']['date']).max().strftime('%Y-%m-%d')
-        st.badge(f"Last WTI Crude OHLC Date: **{wti_latest_date}** | Metrics calculated from last **{weeks_lookback}** weeks of data", color='violet', icon=":material/date_range:")
+        st.badge(f"Last WTI Crude OHLC Date: **{wti_latest_date}** | Metrics calculated from **{start_date.strftime('%Y-%m-%d')}** to **{end_date.strftime('%Y-%m-%d')}**", color='violet', icon=":material/date_range:")
 
         
     if availability['wti'] and wti_f is not None and len(wti_f) > 0:
-        poc_data = calculate_volume_profile(wti_f, window=weeks_lookback)
+        poc_data = calculate_volume_profile(wti_f, window=min(20, len(wti_f) // 2))
         # st.info(f"**Point of Control (POC): ${poc_data['poc']:.2f}**")
         p_high = poc_data['vah']
         p_low = poc_data['val']
@@ -372,15 +460,17 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
 #   -1.5 < z < 1.5	Spread is normal	Neutral	No strong arbitrage signal
 
     if availability['wti']:
-        if metrics['rsi'].iloc[-1] > 80:
+        if len(metrics['rsi']) > 0 and metrics['rsi'].iloc[-1] > 80:
             m5.metric("RSI (14)", f"{metrics['rsi'].iloc[-1]:.1f}", 
             delta="Overbought", delta_color="red", delta_arrow="up")
-        elif metrics['rsi'].iloc[-1] < 20:
+        elif len(metrics['rsi']) > 0 and metrics['rsi'].iloc[-1] < 20:
             m5.metric("RSI (14)", f"{metrics['rsi'].iloc[-1]:.1f}", 
             delta="Oversold", delta_color="green", delta_arrow="down")
-        else:
+        elif len(metrics['rsi']) > 0:
             m5.metric("RSI (14)", f"{metrics['rsi'].iloc[-1]:.1f}", 
             delta="Neutral", delta_color="blue", delta_arrow="off")
+        else:
+            m5.metric("RSI (14)", "N/A", delta="No Data")
     else:
         m5.warning("No WTI Data")
 
@@ -455,16 +545,48 @@ def render_terminal_page(datasets, availability, weeks_lookback=26, rv_window=30
     st.divider()
     st.subheader("📊 S&D Momentum Analysis")
 
-    if availability['eia'] and eia_f is not None and len(eia_f) > 0:
+    if availability['eia'] and eia_src is not None and len(eia_src) > 0:
         def clean_m(val): return float(val.replace('M','')) if isinstance(val,str) else float(val) if pd.notnull(val) else 0
-        eia_f_copy = eia_f.copy()
+        eia_f_copy = eia_src.copy()
         eia_f_copy['shock'] = eia_f_copy['actual'].apply(clean_m) - eia_f_copy['forecast'].apply(clean_m)
         eia_f_copy['cum_shock'] = eia_f_copy['shock'].cumsum()
+        eia_f_copy['color'] = eia_f_copy['shock'].apply(lambda x: 'rgba(239,83,80,0.85)' if x > 0 else 'rgba(38,166,154,0.85)')
+        eia_f_copy['label'] = eia_f_copy['shock'].apply(lambda x: f"Build {abs(x):.2f}M" if x > 0 else f"Draw {abs(x):.2f}M")
 
-        fig_shock = go.Figure()
-        fig_shock.add_trace(go.Bar(x=eia_f_copy['release_date'], y=eia_f_copy['shock'], name="Weekly Shock", marker_color='blue'))
-        fig_shock.add_trace(go.Scatter(x=eia_f_copy['release_date'], y=eia_f_copy['cum_shock'], name="Cumulative Shock", line=dict(color='yellow', width=3)))
-        fig_shock.update_layout(title="Inventory Shock vs Cumulative Trend", template="plotly_dark", height=400)
+        from plotly.subplots import make_subplots
+        fig_shock = make_subplots(specs=[[{"secondary_y": True}]])
+
+        fig_shock.add_trace(go.Bar(
+            x=eia_f_copy['release_date'],
+            y=eia_f_copy['shock'],
+            name="Weekly Shock (M BBL)",
+            marker_color=eia_f_copy['color'],
+            text=eia_f_copy['label'],
+            textposition='outside',
+            textfont=dict(size=10),
+        ), secondary_y=False)
+
+        fig_shock.add_trace(go.Scatter(
+            x=eia_f_copy['release_date'],
+            y=eia_f_copy['cum_shock'],
+            name="Cumulative Pressure",
+            mode='lines+markers',
+            line=dict(color='gold', width=2, dash='dot'),
+            marker=dict(size=5),
+        ), secondary_y=True)
+
+        fig_shock.add_hline(y=0, line_dash="dash", line_color="white", line_width=1, opacity=0.4)
+
+        fig_shock.update_layout(
+            title=dict(text="📦 Weekly Inventory Shock  |  🟢 Draw (Bullish)  🔴 Build (Bearish)", font=dict(size=14)),
+            template="plotly_dark",
+            height=420,
+            bargap=0.35,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(t=60, b=40),
+        )
+        fig_shock.update_yaxes(title_text="Shock (M BBL)", secondary_y=False)
+        fig_shock.update_yaxes(title_text="Cumulative (M BBL)", secondary_y=True, showgrid=False)
         st.plotly_chart(fig_shock, use_container_width=True)
     else:
         st.warning("⏳ EIA data not available. Upload EIA inventory file to view S&D analysis.")
@@ -535,6 +657,41 @@ def render_volume_profile_page(df):
         st.warning("⚠️ Insufficient data for Volume Profile analysis. Need at least 10 bars.")
         return
 
+    st.divider()
+    
+    col_date1, col_date2, col_spacing = st.columns([1.5, 1.5, 2])
+    
+    with col_date1:
+        start_date = st.date_input(
+            "📅 Start Date",
+            value=pd.Timestamp.now() - pd.Timedelta(days=30),
+            help="Filter data from this date onwards"
+        )
+    
+    with col_date2:
+        end_date = st.date_input(
+            "📅 End Date",
+            value=pd.Timestamp.now(),
+            help="Filter data up to this date"
+        )
+    
+    st.divider()
+    
+    def filter_by_date_range(data, date_col, start_dt, end_dt):
+        if data.empty or date_col not in data.columns:
+            return data
+        data_copy = data.copy()
+        data_copy[date_col] = pd.to_datetime(data_copy[date_col], errors='coerce')
+        start_datetime = pd.to_datetime(start_dt)
+        end_datetime = pd.to_datetime(end_dt)
+        return data_copy[(data_copy[date_col] >= start_datetime) & (data_copy[date_col] <= end_datetime)].reset_index(drop=True)
+    
+    df = filter_by_date_range(df, 'date', start_date, end_date)
+    
+    if df is None or df.empty or len(df) < 10:
+        st.warning(f"⚠️ No data found for selected date range ({start_date} to {end_date}). Please adjust the filter.")
+        return
+
     # Sidebar: User Inputs
     st.sidebar.markdown("### ⚙️ Volume Profile Settings")
     lookback_bars = st.sidebar.number_input(
@@ -568,7 +725,7 @@ def render_volume_profile_page(df):
     # Filter df to lookback period for chart (show 1.5x for context)
     df_chart = df.tail(int(lookback_bars * 1.5)).copy()
 
-    st.info(f"**Latest Close:** ${current_price:.2f} | **Data through:** {latest_date} | **Lookback:** {lookback_bars} bars")
+    st.info(f"**Latest Close:** ${current_price:.2f} | **Data through:** {latest_date} | **Date Range:** {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} | **Lookback:** {lookback_bars} bars")
 
     st.divider()
 

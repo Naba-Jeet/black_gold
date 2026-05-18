@@ -1,0 +1,240 @@
+{
+  "project": "black_gold",
+  "full_name": "Crude Flow Terminal - Autonomous AI Driven Crude Oil Market Analyzer",
+  "captured_at_utc": "2026-04-24T15:56:11Z",
+  "source": "code-review-graph + manual codebase review",
+  "purpose": "Real-time crude oil market analysis, trading signals, and backtesting platform using quantitative analytics, technical indicators, and fundamental data (inventory, COT positioning, spreads, volatility)",
+  "deployment": "Streamlit web app (http://localhost:8501) + DuckDB columnar database + Docker containerization",
+  "graph_snapshot": {
+    "nodes": 43,
+    "edges": 582,
+    "files": 7,
+    "languages": ["python"],
+    "built_on_branch": "main",
+    "built_at_commit": "c3ddad7bdef7"
+  },
+  "core_files": [
+    {
+      "name": "app.py",
+      "role": "Streamlit main entry point / UI orchestrator",
+      "responsibilities": [
+        "Multi-page navigation (Predictive Terminal, Quant Analysis, Volume Profile, Data Ingestion, Data Explorer)",
+        "Sidebar controls (lookback period, volatility window)",
+        "Dataset loading orchestration (WTI, Brent-Spread, COT, EIA/API stocks, OVX, RBOB, Heating Oil)",
+        "Page routing to UI components"
+      ]
+    },
+    {
+      "name": "ui_components.py",
+      "role": "UI rendering hub - all visual pages",
+      "responsibilities": [
+        "render_ingestion_page() - Data upload & validation",
+        "render_data_explorer_page() - Browse stored datasets",
+        "render_terminal_page() - Core predictive dashboard (quant metrics, force matrix, alerts)",
+        "render_quant_page() - Detailed technical analysis (liquidity sweeps, VWAP, RSI, S&R)",
+        "render_volume_profile_page() - Volume profile analysis & trade signals",
+        "Calls data_engine, quant_engine, and strategy functions to compute & display metrics"
+      ]
+    },
+    {
+      "name": "quant_engine.py",
+      "role": "Core quantitative analytics engine",
+      "functions": [
+        "calculate_crack_spreads() - Refining spreads (2*RBOB + 1*HO - 3*WTI)",
+        "calculate_z_score() - Normalize WTI-Brent spread against historical mean/std",
+        "detect_liquidity_sweeps_v2() - Identify breakouts with volume confirmation (>1.5x avg vol)",
+        "calculate_inventory_shock() - EIA/API actual vs forecast difference (in barrels)",
+        "calculate_inv_momentum() - 4-week MA of inventory changes (structural draw indicator)",
+        "calculate_rsi() - 14-period Relative Strength Index",
+        "calculate_vwap() - 20-period Volume-Weighted Avg Price",
+        "calculate_sr_levels() - Support/Resistance within 10-period window",
+        "generate_convergence_verdict() - Consensus signal from multiple indicators (z-score, COT, inventory, price overextension)",
+        "generate_detailed_force_matrix() - Multi-factor risk/reward matrix with weighted scores",
+        "calculate_volume_profile() - VWAP-based volume distribution analysis",
+        "calculate_realized_volatility() - 30-period rolling volatility from price returns",
+        "calculate_vol_premium() - OVX vs implied volatility comparison"
+      ]
+    },
+    {
+      "name": "strategy.py",
+      "role": "Trading strategy & volume profile analysis",
+      "functions": [
+        "build_volume_profile() - Bin prices by volume distribution",
+        "calculate_poc() - Point of Control (highest volume price)",
+        "calculate_value_area() - 70% of volume price range",
+        "detect_hvn_lvn() - High/Low Volume Node detection",
+        "detect_volume_gaps() - Price levels with no volume (resistance/support)",
+        "calculate_volume_profile_signals() - Orchestrator combining all VP analysis",
+        "generate_vp_signals() - Entry/exit rules from VP structure",
+        "calculate_vp_targets_sl() - TP/SL levels from POC, value area, HVN/LVN"
+      ]
+    },
+    {
+      "name": "data_engine.py",
+      "role": "Data persistence & validation",
+      "functions": [
+        "normalize_columns() - Standardize column names across tables",
+        "clean_volume() - Handle missing/zero volume values",
+        "validate_df() - Schema enforcement (date, price, vol, etc)",
+        "generate_row_hash() - Upsert detection (avoid duplicates)",
+        "upsert_to_duckdb() - Idempotent writes to DuckDB tables",
+        "load_from_db() - Query helper for retrieving datasets"
+      ]
+    },
+    {
+      "name": "config.py",
+      "role": "Global constants & configuration",
+      "content": [
+        "DB_FILE: crude_flow.db",
+        "REQUIRED_SCHEMAS: 8 tables (wti_ohlc, wti_brent_spread, api_stocks, eia_stocks, cot_data, gasoline_rbob, heating_oil, ovx_data)",
+        "PRIMARY_KEYS: Deduplication keys per table",
+        "DATA_SOURCES: URLs to public data (Investing.com, CFTC, etc)",
+        "WEIGHTS: Scoring multipliers (crack_spread:2x, z_score:3x, cot_squeeze:3x, inv_surprise:2x, inv_momentum:2x, price_overext:-2x)"
+      ]
+    },
+    {
+      "name": "backtester.py",
+      "role": "Historical simulation & backtest framework",
+      "responsibilities": [
+        "load_historical_data() - Multi-table historical queries from DuckDB",
+        "calculate_daily_signals() - Compute all metrics for each backtest date",
+        "generate_trade_signal() - BUY/SELL/NEUTRAL from force matrix",
+        "run_backtest() - Walk-forward simulation with P&L tracking",
+        "print_backtest_results() - Summary statistics (Sharpe, max drawdown, win rate, etc)"
+      ]
+    }
+  ],
+  "data_flow": {
+    "step_1_ingest": "CSV upload → data_engine (validate, normalize, deduplicate) → upsert_to_duckdb (crude_flow.db)",
+    "step_2_load": "app.py / backtester.py queries DuckDB for (WTI, Brent-Spread, COT, EIA/API, OVX, RBOB, HO)",
+    "step_3_compute": "quant_engine computes cracks, z-scores, inventory metrics, technical indicators; strategy computes volume profiles",
+    "step_4_signal": "generate_convergence_verdict + generate_detailed_force_matrix → weighted composite signal (BUY/SELL/NEUTRAL)",
+    "step_5_render": "ui_components.render_* pages display metrics, charts, alerts, and VP-based trade targets/stops",
+    "step_6_backtest": "backtester.py replays all dates, accumulates P&L, reports Sharpe/drawdown/win-rate"
+  },
+  "key_metrics_produced": [
+    "Crack Spreads (refinery margin proxy)",
+    "Z-Score (WTI-Brent normalization for mean reversion)",
+    "Inventory Shock (EIA/API surprise vs consensus)",
+    "Inventory Momentum (4-week MA of stock changes)",
+    "COT Positioning Squeeze (long/short concentration)",
+    "RSI (momentum overbought/oversold)",
+    "VWAP (fair value reference)",
+    "Support/Resistance Levels",
+    "Liquidity Sweeps (volume-confirmed breakouts)",
+    "Realized Volatility (30-day rolling)",
+    "OVX Volatility Premium",
+    "Volume Profile (POC, Value Area, HVN/LVN, Gaps)",
+    "Trade Signals (BUY/SELL/NEUTRAL + targets/stops)"
+  ],
+  "dependency_flow": {
+    "app.py": [
+      "ui_components.py",
+      "data_engine.py",
+      "quant_engine.py"
+    ],
+    "ui_components.py": [
+      "config.py",
+      "data_engine.py",
+      "quant_engine.py",
+      "strategy.py"
+    ],
+    "quant_engine.py": [
+      "config.py"
+    ],
+    "data_engine.py": [
+      "config.py"
+    ],
+    "backtester.py": [
+      "quant_engine.py",
+      "strategy.py"
+    ]
+  },
+  "functional_hubs": {
+    "ui_components.py::render_terminal_page": {
+      "role": "Core predictive dashboard orchestrator",
+      "calls": [
+        "quant_engine.py::calculate_inventory_shock",
+        "quant_engine.py::calculate_z_score",
+        "quant_engine.py::calculate_inv_momentum",
+        "quant_engine.py::calculate_rsi",
+        "quant_engine.py::generate_detailed_force_matrix",
+        "quant_engine.py::calculate_volume_profile",
+        "quant_engine.py::calculate_vol_premium"
+      ],
+      "produces": "Force matrix, alerts, fundamental metrics display"
+    },
+    "ui_components.py::render_volume_profile_page": {
+      "role": "Volume profile analysis & trading signals",
+      "calls": [
+        "strategy.py::calculate_volume_profile_signals",
+        "strategy.py::generate_vp_signals",
+        "strategy.py::calculate_vp_targets_sl"
+      ],
+      "produces": "VP visualization, entry/exit rules, TP/SL levels"
+    },
+    "strategy.py::calculate_volume_profile_signals": {
+      "role": "Internal VP orchestrator",
+      "calls": [
+        "strategy.py::build_volume_profile",
+        "strategy.py::calculate_value_area",
+        "strategy.py::detect_hvn_lvn",
+        "strategy.py::detect_volume_gaps",
+        "strategy.py::calculate_poc"
+      ],
+      "produces": "Comprehensive VP analysis dict"
+    },
+    "quant_engine.py::calculate_vol_premium": {
+      "role": "Volatility surface metric",
+      "calls": [
+        "quant_engine.py::calculate_realized_volatility"
+      ],
+      "produces": "OVX vs RV premium/discount"
+    }
+  },
+  "critical_paths": {
+    "predictive_terminal": [
+      "app.py → ui_components.render_terminal_page() → quant_engine (inventory, z-score, RSI, force matrix) → UI",
+      "Inputs: WTI, Brent-Spread, COT, EIA/API",
+      "Outputs: BUY/SELL signal, risk/reward matrix, alerts"
+    ],
+    "volume_profile_trading": [
+      "app.py → ui_components.render_volume_profile_page() → strategy (VP, POC, value area, HVN/LVN) → trade signals + targets/stops",
+      "Inputs: WTI OHLCV",
+      "Outputs: Entry/exit rules, TP/SL levels"
+    ],
+    "backtest": [
+      "backtester.py → load_historical_data() → walk-forward daily signals → quant_engine + strategy → P&L accumulation → performance stats",
+      "Inputs: Historical 8-table data",
+      "Outputs: Sharpe, max drawdown, win rate, cumulative return"
+    ]
+  },
+  "architecture_notes": {
+    "separation_of_concerns": [
+      "app.py: UI routing only",
+      "ui_components.py: Rendering logic (calls downstream analytics)",
+      "quant_engine.py: Pure math (indicators, metrics, scoring)",
+      "strategy.py: Pure math (volume analysis, signal generation)",
+      "data_engine.py: Storage/retrieval abstraction",
+      "config.py: Constants (schemas, URLs, weights)"
+    ],
+    "statefulness": [
+      "DuckDB is persistent store (crude_flow.db)",
+      "Streamlit session state manages page-level UI state",
+      "No inter-function state passed (except DataFrames via return values)"
+    ],
+    "scaling_bottlenecks": [
+      "DuckDB query performance on large datasets (>1M rows)",
+      "Quant computations (rolling window calculations) may be CPU-bound for backtests",
+      "Volume profile binning resolution could impact memory for high-frequency data"
+    ]
+  },
+  "tech_stack": [
+    "Streamlit - UI framework",
+    "DuckDB - Columnar OLAP database",
+    "Pandas - Data manipulation",
+    "NumPy - Numerical computing",
+    "Docker - Containerization (docker-compose.yml)",
+    "Python 3.x"
+  ]
+}
